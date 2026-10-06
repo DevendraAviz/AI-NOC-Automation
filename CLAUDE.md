@@ -21,7 +21,7 @@ an Excel matrix **and an HTML report** — the same layout as Dev's test sheet:
 all four connectors probed and run (§3.10). Refactored the same day (§3.13): the code is now a
 package (`ncp_suite/`), an answer ends on NCP's real end frame, and the four connectors run side
 by side. A full 80-test run went from ~105 min (measured pace) to 40 min.
-Still open: §3.11 and §11.
+Still open: §3.11 and §11. **Next session: start with §0.1 (to do — debug the FAILs).**
 
 **What you need**
 - Python **3.10+** (built on 3.10.12; also run on 3.14.0) and `pip`.
@@ -52,6 +52,67 @@ wrong (exit code 2, the message names the blank key — never its value).
 Useful variants: one connector `-k zabbix` or `--connectors zabbix,ones` · some prompts
 `--prompts P01,P07` · another prompt sheet `--excel path.xlsx` · one test at a time with live
 logs `-n 0` (use it to debug one prompt).
+
+---
+
+## 0.1 To do next session — debug the FAILs (written 2026-10-06, Dev: "tomorrow")
+
+**Where things stand.** Code + docs committed locally (`ed1e748` refactor, then the runbook
+commit). Dev's account cannot push to `vishakh-aviz/AI-NOC-Automation` (403): the plan is a fork
+(`fork` remote) + pull request for Vishakh to merge. First check: `git status -sb`, `git log
+--oneline -3`, `git remote -v`, and whether the PR is merged.
+
+**Evidence to use** (on Dev's Mac only — `reports/` is git-ignored):
+- Full run `reports/NCP_MCP_Prompt_Results_20261006_160711.{html,xlsx}`: 29 PASS, 46 FAIL, 3 NA,
+  2 BLOCKED. Start from the xlsx **Failures** sheet (reason, expected, conversation id, tools).
+  This run predates the source-data column — re-run a test to see NCP's answer next to the source.
+- Follow-up re-run `…_20261006_164827` (7 tests) and catalyst-P03 `…_20261006_165852`.
+- Source snapshots `reports/snapshots/*.json` (field names, raw samples).
+
+**How** (do not skip): Dev's 5 rules (§7) and the three layers; repeat a FAIL once in a new chat
+(`pytest test_main.py --connectors X --prompts Pnn -n 0`); never loosen a check (rule 12) — a wrong
+source mapping is fixed in `ncp_suite/truth/<source>.py`, a grading rule only after Dev agrees.
+Bug drafts only in the chat, only if Dev asks.
+
+**Suggested first step:** keep the `agent_trace` that the `agent_complete` frame already carries
+(today only tool names are kept, §3.13) and show it in the report — that is the tool payload Dev's
+rule 1 needs to tell "NCP relayed it wrong" from "the tool returned wrong data".
+
+**A. Check the suite first (suspected suite / source-mapping misses):**
+1. **Zabbix P03** — "mgmt IP missing or different" on 20 of 23 devices (conv 3091): compare the
+   source IP (`main` interface in `truth/zabbix.py`) with what NCP listed.
+2. **Zabbix P05** — models not mentioned (DCS-7010T-48, N3K-C3048TP-1GE, WS-C3650-48TQ…), conv 3105:
+   check which inventory field is "model" for Zabbix.
+3. **Zabbix P17 / ONES P17** — "faulty fan/PSU not reported" on many devices (conv 3155, 3198): the
+   source may mark parts faulty wrongly — check `SENSOR_OK` (Zabbix value map) and ONES status values.
+4. **Zabbix P18** — NCP 34 vs source 43 on 12 of 13 (conv 3159): the source takes the **max** sensor;
+   NCP may report another sensor. Decide which temperature is meant (ask Dev).
+5. **Zabbix P09** — memory NCP 10 vs source 96 (conv 3120); **Zabbix P12** — Arista at 95 % not
+   listed (conv 3133): check the memory item key (`vm.memory.util` vs `vm.memory.size[pused]`).
+6. **Interfaces P13 / P14** — Zabbix "missing 57 of 57", ONES "missing 56 of 56" and ONES "50+ down"
+   (conv 3136, 3183, 3185): check interface-name matching (`compare.norm_if`, ONES alias) and how
+   `is_down` reads ONES / Zabbix oper status.
+7. **zabbix-P20 / nexus-P20** — "no chart" although NCP called `UI_Visualization` (conv 3218, 3166):
+   check the saved message's `ui_resources`; confirm in the NCP UI whether a chart shows (§3.10).
+8. **ones-P15** — two devices named `Leaf-1` (conv 3221): set `DEVICE_ONES` to a unique host / IP
+   or let the auto-pick skip duplicate names (Dev to choose).
+9. **ONES P18** — "not reported" (conv 3202): ONES only fills PSU temperature (§3.11 open question).
+10. **ONES P01** — missing `Spine-2` (conv 3087): old/duplicate device in ONES inventory?
+
+**B. Likely NCP-side — confirm with the tool payload, then report to Dev:**
+- **Nexus (16 FAIL):** NCP's Nexus MCP sees 0 devices (ND in discovery mode, §3.10). One issue, not 16.
+- **ONES P07 / P09 / P10:** NCP gave CPU values although ONES has none ("possible invented data").
+- **Catalyst P14** misses down ports (also conv 2999, 3008) and **P15** shows a sample only (also
+  3000, 3009) — repeated, so candidate bugs. **Catalyst P11 / P12:** the §11 q8 rule (Dev).
+- **Zabbix P06 / P19:** source counts 16 devices unhealthy (triggers ≥ severity 3, unavailable) —
+  NCP may define "unhealthy" differently (§11 q7). Zabbix P10 / Nexus P10: "no device named".
+- **Timeouts:** Catalyst P13 (180 s), ONES P08 / P10 (180 s / 120 s) — NCP slow on large answers.
+- **Flaky (passed on repeat):** catalyst-P03, zabbix-P06, zabbix-P16.
+
+**C. Dev to decide:** §11 q7 (meaning of unhealthy), q8 (threshold rule), q9 (4 chats at once),
+q10 (follow-up after "no data"), the zabbix-P20 chart-widget rule, ONES temperature (§3.11).
+
+When an item is done: say so here (or delete it) and log the change in §12.
 
 ---
 
@@ -1092,3 +1153,6 @@ Add one line per change: date, who, what, why.
   catalyst-P03 (conv 3224).
 - **2026-10-06 (Dev + Claude)** — `docs/RUNBOOK.md` added: short runbook (prerequisites, setup,
   run order, CLI options, reports, troubleshooting, rules) for anyone running the suite. No code changed.
+- **2026-10-06 (Dev + Claude)** — §0.1 added: to-do for the next session — debug the FAILs of the
+  full run (suite-side suspects first, then NCP-side, then Dev's decisions), with test ids and
+  conversation ids. No code changed.
