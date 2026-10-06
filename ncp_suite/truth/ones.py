@@ -13,7 +13,7 @@ import json
 
 import requests
 
-from truth.base import (Component, Device, Interface, Link, NoTruth, Source, as_list,
+from ncp_suite.truth.base import (Component, Device, Interface, Link, NoTruth, Source, as_list,
                         health_of, low, num, pick)
 
 

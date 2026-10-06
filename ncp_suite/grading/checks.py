@@ -11,13 +11,13 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass, replace
 
-import config
-from compare import (all_lines, clauses_about, contains, count_found, first_position, has_bad_word, has_chart,
-                     integers, interface_names, lines_about, low, mentions, name_column_extras,
-                     norm_if, numbers, plain, says_none, says_not_available, table_rows, row_text,
-                     value_for)
-from prompts import PromptRow
-from truth.base import Device, NoTruth, Source, Unsupported
+from ncp_suite import settings
+from ncp_suite.grading.compare import (all_lines, clauses_about, contains, count_found, first_position,
+                                       has_bad_word, has_chart, integers, interface_names, lines_about, low,
+                                       mentions, name_column_extras, norm_if, numbers, plain, says_none,
+                                       says_not_available, table_rows, row_text, value_for)
+from ncp_suite.prompts import PromptRow
+from ncp_suite.truth.base import Device, NoTruth, Source, Unsupported
 
 
 @dataclass
@@ -188,7 +188,7 @@ def health_summary(ctx: Ctx) -> Verdict:
 # ---- metrics -------------------------------------------------------------------------
 def _metric_all(ctx: Ctx, kind: str) -> Verdict:
     truth = ctx.src.metric(kind)                       # read now, right after the answer
-    tol = ctx.row.tol if ctx.row.tol is not None else config.TOLERANCE[kind]
+    tol = ctx.row.tol if ctx.row.tol is not None else settings.TOLERANCE[kind]
     ips = _ips(ctx.src)
     exp = f"{LABEL[kind]} (±{tol:g}): " + cap(f"{n}={v:g}" for n, v in truth.items())
     problems = []
@@ -227,7 +227,7 @@ def cpu_mem_device(ctx: Ctx) -> Verdict:
     for kind, v in (("cpu", cpu), ("mem", mem)):
         if v is None:
             continue
-        tol = ctx.row.tol if ctx.row.tol is not None else config.TOLERANCE[kind]
+        tol = ctx.row.tol if ctx.row.tol is not None else settings.TOLERANCE[kind]
         got = value_for(ctx.answer, names, WORDS[kind], whole_text=True)
         if got is None:
             problems.append(f"{LABEL[kind]} not reported (source {v:g})")
@@ -240,7 +240,7 @@ def cpu_mem_device(ctx: Ctx) -> Verdict:
 
 def cpu_top(ctx: Ctx) -> Verdict:
     truth = ctx.src.metric("cpu")
-    tol = ctx.row.tol if ctx.row.tol is not None else config.TOLERANCE["cpu"]
+    tol = ctx.row.tol if ctx.row.tol is not None else settings.TOLERANCE["cpu"]
     top = max(truth.values())
     accepted = {n for n, v in truth.items() if v >= top - tol}
     exp = f"highest CPU {top:g}%: {cap(sorted(accepted))} (±{tol:g})"
@@ -256,7 +256,7 @@ def cpu_top(ctx: Ctx) -> Verdict:
 def _above(ctx: Ctx, kind: str) -> Verdict:
     truth = ctx.src.metric(kind)
     thr = ctx.row.param if ctx.row.param is not None else 80.0
-    tol = ctx.row.tol if ctx.row.tol is not None else config.TOLERANCE[kind]
+    tol = ctx.row.tol if ctx.row.tol is not None else settings.TOLERANCE[kind]
     must = sorted(n for n, v in truth.items() if v > thr + tol)
     must_not = sorted(n for n, v in truth.items() if v <= thr - tol)
     exp = (f"above {thr:g}% (±{tol:g} grey zone): {cap(must) or 'none'}; "

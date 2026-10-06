@@ -5,8 +5,8 @@ receives this folder — and their Claude — can start work without any other f
 history. Everything needed to run the current suite is here or in `README.md`.
 
 Owner: **Dev (Devendra Shekhawat)**, QA, Aviz Networks. Send results and questions to him.
-Created: 2026-09-29. Last updated: 2026-10-06 (handover: folder shared with a colleague for
-the first live run in his environment).
+Created: 2026-09-29. Last updated: 2026-10-06 (refactor: `ncp_suite/` package, answer-end fix,
+parallel runs — §3.13).
 
 ---
 
@@ -14,37 +14,44 @@ the first live run in his environment).
 
 **What this folder is.** A pytest suite that sends chat prompts to NCP 2.0 (AI NOC), reads the
 right answer straight from each connector's own system, compares the two by code, and fills
-an Excel matrix — the same layout as Dev's test sheet:
+an Excel matrix **and an HTML report** — the same layout as Dev's test sheet:
 `Prompt | Nexus Dashboard (Local MCP) | Catalyst Center (Local MCP) | Zabbix | ONES | Comments`.
 
-**Status (2026-10-06).** Built and self-tested: 54 offline tests pass, and an end-to-end run
-against a fake NCP (login + chat WebSocket) and a fake ONES passed. **First live run done on
-NCP 10.4.5.236, Catalyst only** — that box has no Nexus, Zabbix or ONES connector (§3.10).
-Endpoint paths and field names for Nexus, Zabbix and ONES are still not confirmed (§3.11).
+**Status (2026-10-06).** Built and self-tested: 72 offline tests pass. **Live on NCP 10.4.5.236:**
+all four connectors probed and run (§3.10). Refactored the same day (§3.13): the code is now a
+package (`ncp_suite/`), an answer ends on NCP's real end frame, and the four connectors run side
+by side. A full 80-test run went from ~105 min (measured pace) to 40 min.
+Still open: §3.11 and §11.
 
 **What you need**
-- Python **3.10+** (built on 3.10.12; 3.9 should work) and `pip`.
-- A machine on the lab network that reaches NCP (`10.4.5.62` by default) **and** the four
+- Python **3.10+** (built on 3.10.12; also run on 3.14.0) and `pip`.
+- A machine on the lab network that reaches NCP (`10.4.5.236`, the box with all four
+  connectors — set in `.env`) **and** the four
   systems: Nexus Dashboard `10.20.11.3` (https), Catalyst Center `10.4.5.230` (https),
   Zabbix `10.4.4.177:8088` (http), ONES `10.4.4.181` (https).
 - The NCP login password for user `superadmin` (`NCP_PASSWORD` — blank in `.env`; ask Dev).
-- The `#tag` of each of the four connectors as configured in NCP (defaults below are guesses).
+- The `#tag` of each connector as configured in NCP. On 10.4.5.236: `#Nexus-mcp`, `#mcp-cat`,
+  `#zabbix`, `#ONES-MCP` (case-sensitive; already in `.env.example`).
 
 **Steps — in this order**
 
 | # | Do | Expect |
 |---|---|---|
-| 1 | `python3 -m venv .venv` then `source .venv/bin/activate` (Windows: `.venv\Scripts\activate`) then `pip install -r requirements.txt` | packages installed |
+| 1 | `python3 -m venv .venv` then `source .venv/bin/activate` (Windows: `.venv\Scripts\activate`) then `pip install -r requirements.txt` | packages installed (incl. `pytest-xdist`) |
 | 2 | Check `.env` is in the folder. If missing: copy `.env.example` to `.env` and ask Dev for the values. Fill `NCP_PASSWORD`; check `NCP_HOST`, `TAG_NEXUS`, `TAG_CATALYST`, `TAG_ZABBIX`, `TAG_ONES` | — |
-| 3 | `pytest` (no arguments = offline self-tests only, no network) | `54 passed`. If not, stop — it is a Python / package problem, not the lab |
-| 4 | `pytest test_sources.py` (reads the 4 systems directly, no NCP) | 4 passed; files `reports/snapshots/<connector>.json` (nexus, catalyst, zabbix, ones) |
+| 3 | `pytest` (no arguments = offline self-tests only, no network) | `72 passed` in ~6 s. If not, stop — it is a Python / package problem, not the lab |
+| 4 | `pytest test_sources.py` (reads the 4 systems directly, no NCP) | 4 passed in ~8 s; one summary line per connector at the end; files `reports/snapshots/<connector>.json` |
 | 5 | Open each snapshot. Every data kind shows `OK`, `UNSUPPORTED`, `NO_TRUTH` or `ERROR` (§4 says what to do) | devices `OK` for all 4 |
-| 6 | Smoke test, one prompt on one connector: `pytest test_main.py --connectors ones --prompts P02` | one result; NCP login and chat work |
-| 7 | Full run: `pytest test_main.py` (80 tests = 20 prompts × 4 connectors; time not measured yet — guess 1–2 hours) | `reports/NCP_MCP_Prompt_Results_<time>.xlsx` + `reports/report.html` |
+| 6 | Smoke test, one prompt on one connector: `pytest test_main.py --connectors ones --prompts P02` | one result in ~20 s; NCP login and chat work |
+| 7 | Full run: `pytest test_main.py` (80 tests = 20 prompts × 4 connectors, 4 connectors side by side; ~40 min, set by the slowest connector — ONES) | `reports/NCP_MCP_Prompt_Results_<time>.html` + `.xlsx` (same name). Open the HTML in a browser — it is rewritten after every test |
 | 8 | Send Dev the files in §5 | — |
 
+A live run first checks `.env` and the NCP login, and stops in under a second if either is
+wrong (exit code 2, the message names the blank key — never its value).
+
 Useful variants: one connector `-k zabbix` or `--connectors zabbix,ones` · some prompts
-`--prompts P01,P07` · another prompt sheet `--excel path.xlsx`.
+`--prompts P01,P07` · another prompt sheet `--excel path.xlsx` · one test at a time with live
+logs `-n 0` (use it to debug one prompt).
 
 ---
 
@@ -76,7 +83,7 @@ Rules 1–9 are Dev's (2026-09-29). Rules 10–12 restate decisions already made
     passwords: keep it private, never commit it (it is in `.gitignore`), never paste it into a
     chat, report, JIRA or this file. Snapshots and reports do not contain passwords — keep it so.
 12. **Never loosen a check to make a test pass.** Wrong field name or path on the source side →
-    fix `truth/<source>.py`. A grading rule looks wrong → ask Dev first, then change the rule
+    fix `ncp_suite/truth/<source>.py`. A grading rule looks wrong → ask Dev first, then change the rule
     and its self-test together, and log it in §12.
 
 ---
@@ -94,6 +101,33 @@ Rules 1–9 are Dev's (2026-09-29). Rules 10–12 restate decisions already made
 - Checks a person runs by hand should be **single standalone commands**, no back-and-forth.
 - **After any code change run `pytest`** (offline self-tests) — it must stay green.
 - **Log every change** in §12 with the date and your name, one line per change.
+
+### 2.1 Standing instructions from Dev (2026-10-06) — apply to every new phase
+
+As Dev gave them:
+
+> * **Baseline Analysis:** Inspect the existing test suites inside the `Automation 2/` folder to
+>   understand:
+>   * The current repository layout, test runner, and framework conventions (fixtures, page
+>     objects/helpers, assertion styles).
+>   * Scenarios already automated so we strictly avoid duplicate coverage.
+> * **Propose New Automation Use Cases:** Formulate a prioritized list of novel test scenarios
+>   specifically targeting NCP 2.0 capabilities.
+
+> "Reuse existing components from `Automation 2/` wherever applicable, particularly:
+>
+> 1. Follow-up prompt/query chaining mechanisms based on NCP outputs.
+> 2. Underlying connection, retry, and session-handling helpers.
+>
+> Default to existing implementations for consistency, but feel free to refactor or propose
+> more optimal, robust versions if the current approach has limitations or performance
+> bottlenecks."
+
+How to apply: before building a phase, read the baseline in §9.1 (re-check it if `Automation 2/`
+changed), list what that phase would duplicate, and give Dev a short prioritised list of new
+NCP 2.0 scenarios before writing code. For code, the reuse rules in §9 apply (this wording and
+the 2026-09-29 one agree: start from the existing logic, write it shorter and cleaner, say what
+changed and why).
 
 ---
 
@@ -129,54 +163,80 @@ Dev's sheet. The sheet `how_to_edit` explains each column. `<DEVICE>` is filled 
 | P20 | Plot a bar chart of devices by OS version. | chart_os_version | a chart is returned; counts in text (if any) are right |
 
 Sheet columns: `ID, Prompt, Check, Param, Tolerance, Applies_To` (blank = all connectors, or
-e.g. `nexus,ones`), `Known_Issue` (a bug id → a FAIL is reported as XFAIL), `Notes`.
+e.g. `nexus,ones`), `Known_Issue` (a bug id → a FAIL is reported as XFAIL), `Notes`; optional
+`Timeout` (seconds to wait for that prompt's answer; blank = keyword rule, §3.3).
 
 ### 3.2 Files
+
+Layout since the refactor (§3.13). The three entry files stay at the top, so every command in
+this file is unchanged; the code lives in the package `ncp_suite/`.
 
 | File | Job |
 |---|---|
 | `README.md` | short run instructions (same steps as §0) |
-| `pytest.ini` | plain `pytest` = offline self-tests only; markers `probe`, `offline`; html report |
-| `conftest.py` | options `--connectors`, `--prompts`, `--excel`; builds one test per prompt × connector; fixtures `chat` (logs in once), `source_for`, `record`; writes the Excel at the end |
-| `config.py` | reads `.env` (real environment variables win); NCP + connector settings; tolerances |
-| `.env` / `.env.example` | settings with values (private) / the same keys without values |
+| `pytest.ini` | plain `pytest` = offline self-tests only; `-n 4 --dist loadgroup` (4 workers); markers `probe`, `offline`; html report |
+| `conftest.py` | one test per prompt × connector (each tagged `xdist_group(<connector>)`); fixtures `chat` (logs in once per worker), `source_for`, `record_result`, `record_probe` |
+| `test_main.py` | the prompt test: `run_case()` → map PASS / FAIL / NA / BLOCKED / XFAIL to pytest |
 | `test_sources.py` | probe: reads each source directly, saves `reports/snapshots/<key>.json` |
-| `test_main.py` | the one prompt test: fill `<DEVICE>` → ask NCP → grade → record |
-| `ai_core.py` | NCP chat over WebSocket: login, follow-ups, stream collect, retries |
-| `checks.py` | 20 grading functions (one per Check name) + `evaluate()` |
-| `compare.py` | pure text helpers: tables, names, numbers, interface names, "not available" wording |
-| `prompts.py` | loads the prompt sheet |
-| `report.py` | Excel: Summary (formulas) · Matrix (Dev's layout) · Details |
-| `judge.py` | optional LLM second-opinion note; never changes a result |
-| `truth/base.py` | shared data model (Device, Interface, Link, Component), `Unsupported` vs `NoTruth`, HTTP, caching, snapshot |
-| `truth/nexus.py`, `catalyst.py`, `zabbix.py`, `ones.py` | one read-only client per source |
+| `.env` / `.env.example` | settings with values (private) / the same keys without values |
+| `ncp_suite/settings.py` | the one place inputs are read: `.env` (real environment variables win); `ChatSettings`; tolerances; connector registry (one row per connector); `missing()` for the pre-flight check |
+| `ncp_suite/prompts.py` | loads the prompt sheet (`PromptRow`) |
+| `ncp_suite/chat/client.py` | NCP chat over WebSocket: login, connect, retries, follow-up loop (`NcpChat`, `ChatResult`) |
+| `ncp_suite/chat/stream.py` | frames → answer text (`AnswerStream`): end frame, activity rules, widgets, images, tool names |
+| `ncp_suite/chat/policy.py` | follow-up detection, the fixed replies, timeout by keyword |
+| `ncp_suite/truth/base.py` | shared data model (Device, Interface, Link, Component), `Unsupported` vs `NoTruth`, HTTP, caching, snapshot |
+| `ncp_suite/truth/nexus.py`, `catalyst.py`, `zabbix.py`, `ones.py` | one read-only client per source |
+| `ncp_suite/grading/checks.py` | 20 grading functions (one per Check name) + `evaluate()` |
+| `ncp_suite/grading/compare.py` | pure text helpers: tables, names, numbers, interface names, "not available" wording |
+| `ncp_suite/grading/judge.py` | optional LLM second-opinion note; never changes a result |
+| `ncp_suite/grading/source_view.py` | the source data a check compared, as a table, for the report (no new read: the graded values) |
+| `ncp_suite/runner.py` | one prompt × one connector, end to end → `PromptResult` (no pytest inside) |
+| `ncp_suite/results.py` | `PromptResult` (the record of one test) + status colours, merge rule, legend |
+| `ncp_suite/reporting/excel.py` | Excel: Summary (formulas) · Matrix (Dev's layout) · Details |
+| `ncp_suite/reporting/html.py` | the HTML report parts: result matrix (Dev's layout + counts) and the details block of each test |
+| `ncp_suite/pytest_plugin.py` | options `--connectors`, `--prompts`, `--excel`; pre-flight check; collects results from all workers; HTML columns; Excel at the end |
 | `data/mcp_prompts.xlsx` | the 20 prompts |
-| `selftest/test_offline.py` | 54 offline tests: every check with a good and a bad answer, NA/BLOCKED, fake NCP chat with a follow-up and with a table widget, chart widget left alone, non-breaking hyphens, report header |
+| `selftest/test_offline.py` | 72 offline tests: every check with a good and a bad answer, NA/BLOCKED, fake NCP chat (follow-up with the tag first, table widget, `agent_complete` end, notification noise, another chat's frames, answer timeout repeated once), follow-up rules, runner, source view, source 401 re-login and nameless rows, settings, prompt sheet, Excel (incl. Failures sheet, control characters), HTML |
 | `AI-NOC-Prompt-Validation-Use-Cases.xlsx` | plan for the next phase (10 AI NOC use cases, §7) — not built yet |
-| `reports/` | generated, git-ignored: snapshots, Excel, `report.html`, `images/` (charts NCP returned) |
+| `reports/` | generated, git-ignored: snapshots, the run's `.html` + `.xlsx`, `images/` (charts NCP returned) |
 
 ### 3.3 What one test does
 
 1. Take one prompt row and one connector. If the prompt has `<DEVICE>`, pick the device
    (`DEVICE_<CONNECTOR>` in `.env`, else the first device by name that has interfaces).
 2. Send `"<#tag> <prompt>"` over the NCP chat WebSocket (admin chat).
-3. If NCP asks a follow-up question, answer with a fixed reply (max 3 follow-ups):
-   data source / connector → "Use the <connector> connector (<#tag>) for this." ·
-   which device → "Device <name>." · time range → "Use the latest values." ·
-   anything else → "Yes, please go ahead for all devices using the <connector> connector (<#tag>)."
+3. If NCP asks a follow-up question, answer with a fixed reply (max 3 follow-ups). **Every reply
+   starts with the connector `#tag` as its own word** (without it NCP loses the connector — §9.2):
+   data source / tool / connector → "<#tag> Use the <connector> connector for this." ·
+   which interface / port → "<#tag> All interfaces on <device>." ·
+   which device → "<#tag> Device <name>." · time range → "<#tag> Use the latest values." ·
+   anything else → "<#tag> Yes, please go ahead for all devices using the <connector> connector."
+   Not a follow-up (the answer is final): a table (> 6 `|`), an image or chart (`![…]`, saved
+   image), long number-heavy text, or a definite "no data" answer ("wasn't able to", "no data",
+   "not available", "there are no", … — `NO_DATA_PHRASES` in `ncp_suite/chat/policy.py`).
 4. Read the ground truth from the source **right after** the answer (CPU / memory /
    temperature are read fresh; inventory is cached for the run).
 5. Grade with the row's check → PASS / FAIL / NA / BLOCKED / XFAIL, with a reason and the
    expected value.
-6. Record it; at the end write the Excel.
+6. Record it (`PromptResult` in the test's `user_properties`); the main process collects all
+   of them and writes the Excel at the end.
 
 Chat protocol (from the old USECASE suite): login `POST https://<host>/api/user/login`
 `{username, password, ladap:false, ldapUrl:null, ldap_auth:null}` → token in `data.token`
-(fetched once per run). WebSocket: `connection_id` → send `auth {token}` → `auth_success` →
+(fetched once per worker). WebSocket: `connection_id` → send `auth {token}` → `auth_success` →
 `conversations_loaded` → `new_conversation` → `conversation_id` → `new_message` → read the
 stream (`agent_llm_stream` chunks, `new_streaming_message_content`, `new_message` contents
-TEXT / REPORT / IMAGE, `new_content`) until `agent_completed` / `agent_stopped` /
-`end_message`. A follow-up reply goes to the same conversation on a **new** connection.
+TEXT / REPORT / IMAGE, `new_content`) until the end frame. A follow-up reply goes to the same
+conversation on a **new** connection.
+
+Frames seen on 10.4.5.236 for one answer (2026-10-06, measured): `message_created` →
+`agent_started` → `agent_tool_call` (`tool_name`) → `agent_status` … → `agent_tool_result` →
+`agent_llm_stream` … → **`agent_complete`** (carries `agent_trace`, `sources_used`) → ~6–10 s
+later `follow_up_suggestions` → `new_notification` frames at any time. Every answer frame
+carries its `conversation_id`; notifications carry none. The suite ends an answer on
+`agent_complete` (also `agent_completed` / `agent_stopped` / `end_message`), then waits
+`WS_END_GRACE_SECONDS` (3 s) for late content. Frames of another conversation are dropped;
+notifications and suggestions do not count as activity.
 
 Seen on 10.4.5.236 (2026-10-06): the socket is closed with `4001 unauthorized` unless the
 login's `authToken` cookie is sent on connect (the browser does this) — the suite sends it.
@@ -185,10 +245,19 @@ rows come in `ui_resources[].structuredContent {title, columns, rows}` on `agent
 the saved message. The suite writes each referenced widget into the answer as a markdown table;
 if the stream did not carry it, it reads the saved message (`load_messages`).
 
-Timeouts: 240 s if the prompt has chart / plot / graph / report / summary / health; 180 s for
-list / table / all / interfaces / counters / each; else 120 s. The answer also ends after 45 s
-of silence once text has arrived. Errors with connect / timed out / auth / closed / refused /
-reset are retried (3 attempts in total, waits 2 s then 4 s); an auth error also refetches the token.
+Timeouts: the row's `Timeout` column (seconds) if set; else 240 s if the prompt has chart /
+plot / graph / report / summary / health; 180 s for list / table / all / interfaces / counters /
+each; else 120 s. Only if NCP sends no end frame, the answer ends after 45 s of silence
+(`WS_QUIET_SECONDS`) once text has arrived.
+
+Retries (each starts a new conversation; waits 2 s, then 4 s):
+- **Connection problems** (connect / refused / reset / closed / handshake / auth / no
+  conversation_id): up to `CHAT_RETRIES` = 3 attempts. An auth error also refetches the token.
+- **NCP was asked but did not answer** (our deadline passed, or an empty answer): repeated
+  **once** (`ANSWER_RETRIES` = 1 — Dev's rule 4, "repeat once in a new chat"). Before
+  2026-10-06 these were retried like connection errors: two prompts spent 3 × 180 s each.
+- Every repeat is listed with the result ("Retries": error, seconds, conversation id), so a
+  prompt that passed only on the second try is visible as flaky.
 
 ### 3.4 Results
 
@@ -203,7 +272,7 @@ reset are retried (3 attempts in total, waits 2 s then 4 s); an auth error also 
 `Unsupported` (product has no such data) → NA if NCP says "not available", FAIL if NCP
 answers with data. `NoTruth` (we could not read it) → BLOCKED.
 
-### 3.5 Grading rules (checks.py)
+### 3.5 Grading rules (ncp_suite/grading/checks.py)
 
 - Numbers are compared by code, never by an LLM. Tolerances (absolute, in `.env`):
   `CPU_TOL=10`, `MEM_TOL=3`, `TEMP_TOL=3`. Threshold prompts (P11 / P12) use a grey zone of
@@ -237,18 +306,26 @@ TLS: all sources and NCP use self-signed certificates; the suite does not verify
 
 ### 3.7 Settings (`.env`)
 
+Lab addresses, users, passwords and `#tags` have **no default in code** (since 2026-10-06; the old
+code default NCP_HOST=10.4.5.62 had drifted from the real box). They live in `.env` only. A live
+run stops before the first test if a key it needs is blank ("required" below). Values that
+work on the lab today are in `.env.example`.
+
 | Key | Default | What |
 |---|---|---|
-| `NCP_HOST` · `NCP_USER` · `NCP_PASSWORD` | 10.4.5.62 · superadmin · (blank) | NCP under test |
-| `NCP_WS_URI` | `wss://<NCP_HOST>/api/v1/ws` | older builds used `wss://<host>:9001/api/v1/ws` |
+| `NCP_HOST` · `NCP_PASSWORD` | required (prompt runs) | NCP under test (10.4.5.236 today) |
+| `NCP_USER` | superadmin | NCP login user |
+| `NCP_WS_URI` · `NCP_LOGIN_URL` | `wss://<NCP_HOST>/api/v1/ws` · `https://<NCP_HOST>/api/user/login` | older builds used `wss://<host>:9001/api/v1/ws` |
 | `NCP_PROJECT_ID` | blank | project chat — **not wired yet** (field name not confirmed); leave blank |
-| `TAG_NEXUS` · `TAG_CATALYST` · `TAG_ZABBIX` · `TAG_ONES` | `#Nexus` · `#catalyst` · `#zabbix` · `#ones` | the `#tag` that routes a prompt to that connector — **check in NCP** |
-| `NEXUS_URL/USER/PASSWORD/DOMAIN` | `https://10.20.11.3`, DefaultAuth | Nexus Dashboard |
-| `CATALYST_URL/USER/PASSWORD` | `https://10.4.5.230` | Catalyst Center |
-| `ZABBIX_URL/USER/PASSWORD` | `http://10.4.4.177:8088` | Zabbix (URL without `/index.php`) |
-| `ONES_URL/USER/PASSWORD` · `ONES_LINKS_PATH` | `https://10.4.4.181` · blank | ONES; links path optional |
+| `TAG_NEXUS` · `TAG_CATALYST` · `TAG_ZABBIX` · `TAG_ONES` | required (prompt runs) | the `#tag` that routes a prompt to that connector — **check in NCP** (case-sensitive) |
+| `<KEY>_URL` · `<KEY>_USER` · `<KEY>_PASSWORD` (KEY = NEXUS, CATALYST, ZABBIX, ONES) | required (prompt runs and probe) | each source system; Zabbix URL without `/index.php` |
+| `NEXUS_DOMAIN` | DefaultAuth | Nexus Dashboard login domain |
+| `ONES_LINKS_PATH` | blank | optional ONES link endpoint |
 | `DEVICE_NEXUS` … `DEVICE_ONES` | blank = auto | device (name or IP) for `<DEVICE>` prompts |
-| `CPU_TOL` · `MEM_TOL` · `TEMP_TOL` | 10 · 3 · 3 | compare tolerances |
+| `CPU_TOL` · `MEM_TOL` · `TEMP_TOL` | 10 · 3 · 3 | compare tolerances (a row's `Tolerance` wins) |
+| `WS_END_GRACE_SECONDS` | 3 | after the end frame, wait this long for late content |
+| `WS_QUIET_SECONDS` | 45 | only if NCP sends no end frame: silence after text = answer done |
+| `CHAT_RETRIES` · `ANSWER_RETRIES` · `MAX_FOLLOWUPS` | 3 · 1 · 3 | attempts per prompt on connection errors · repeats when NCP gave no answer in time / an empty one · follow-ups answered per prompt |
 | `JUDGE_URL` · `JUDGE_MODEL` | blank · gpt-oss-120b | optional second-opinion note |
 
 ### 3.8 Conventions
@@ -260,8 +337,33 @@ TLS: all sources and NCP use self-signed certificates; the suite does not verify
 - Report: `reports/NCP_MCP_Prompt_Results_<YYYYmmdd_HHMMSS>.xlsx` — sheets **Summary**
   (counts by connector and result, as formulas), **Matrix** (Dev's layout; Comments = the
   reason for every non-PASS cell), **Details** (ID, Connector, Scope, Result, Reason,
-  Expected, Prompt sent, Device, Follow-ups, Seconds, Conversation, Judge note, NCP answer).
-  Plus `reports/report.html` from pytest-html.
+  Expected, Prompt sent, Device, Follow-ups, Seconds, Conversation, Tools called, Retries, Judge
+  note, Source data, NCP answer), **Failures** (FAIL and XFAIL only: reason, expected,
+  conversation, tools, retries, follow-ups, source data, NCP answer — start triage here). Details rows are in prompt order, then
+  connector order (not finish order). Control characters are removed from every cell (openpyxl
+  refuses them).
+- Parallel: `pytest.ini` has `-n 4 --dist loadgroup`. Every test of a connector carries
+  `xdist_group(<connector>)`, so each connector has its own worker and sends one prompt at a
+  time; the four connectors run side by side. `-n 0` = one test at a time with live logs.
+  Code that needs the whole run (matrix, Excel) runs only in the main process
+  (`ncp_suite/pytest_plugin.py`); a test passes its result through `user_properties`.
+- **HTML report (pytest-html, one file per run — never overwritten):**
+  `pytest test_main.py` → `reports/NCP_MCP_Prompt_Results_<time>.html` (same name as the xlsx) ·
+  `pytest test_sources.py` → `reports/Source_Probe_<time>.html` · `pytest` → `reports/selftest.html`.
+  `--html=<file>` still overrides. Contents of the prompt-run report:
+  - Environment: NCP host, chat socket, connector tags, prompt sheet, tolerances (no passwords).
+  - **Results by connector** (PASS / FAIL / NA / BLOCKED / XFAIL / Not run / Planned) and the
+    **Result matrix** `ID | Prompt | Nexus | Catalyst | Zabbix | ONES | Comments` — blank cell =
+    not run, "—" = prompt not planned for that connector (`Applies_To`).
+  - One table row per prompt × connector with Connector, Prompt, NCP result, Reason; opening
+    a row shows the prompt sent, device, expected value from the source, follow-ups,
+    conversation id, seconds, the tools NCP called, retries, and **NCP's full answer side by side
+    with the source data the check compared** (the same values that were graded; charts NCP sent
+    as images are embedded).
+  - pytest's own outcome: NA and BLOCKED show as Skipped, Known_Issue as XFailed; the
+    "NCP result" column has our status.
+  - `generate_report_on_test = true` (pytest.ini): the file is rewritten after every test.
+  - If no prompt finished (login failure, wrong `.env`), the report says so at the top.
 - Code based on old code says so at the top (`Based on: …`); behaviour that differs from the
   old code is marked `CHANGED n` in a comment.
 
@@ -271,7 +373,14 @@ Token fetched once per run · fixed follow-up replies (no LLM) · an answer ends
 period only after text has arrived, plus a hard deadline · streamed and final text are not
 doubled · long data-heavy text is never mistaken for a follow-up question · no hard-coded
 ONES subnet or Catalyst device id · strict compare (no "both sides have data" pass) ·
-`authToken` cookie sent on connect · table widgets (`ui://…`) written into the answer text.
+`authToken` cookie sent on connect · table widgets (`ui://…`) written into the answer text ·
+**CHANGED 8** the answer ends on `agent_complete` (the old suite only knew `agent_completed`) ·
+**CHANGED 9** frames of another conversation are dropped and notifications are not activity ·
+**CHANGED 10** the tools NCP called are kept with the result ·
+**CHANGED 11** follow-up replies start with the `#tag` · **CHANGED 12** no follow-up after a
+definite "no data" answer or an image · **CHANGED 13** answer timeouts are repeated once, not
+three times, and every repeat is reported · **CHANGED 14** NCP login token read from `data.token`,
+then `token` / `access_token`. (Details and sources in §9.2.)
 Kept as before: a follow-up reply goes on a new WebSocket connection.
 
 ### 3.10 Verified so far (2026-10-06)
@@ -319,6 +428,33 @@ follow-up and a table widget) and a fake ONES REST passed, including the Excel r
   returns each switch's login in clear text — the probe now masks it. Three hostnames are
   listed twice (`sonic`, `Leaf-1`, `Spine-1`, old + current device).
 - Full 80-test run started 14:56 → `reports/NCP_MCP_Full_Run_20261006.html` + the xlsx.
+- **Full run on the refactored code (Dev's machine, 16:07–16:47, 40 min 26 s,
+  `NCP_MCP_Prompt_Results_20261006_160711`):** 29 PASS, 46 FAIL, 3 NA, 2 BLOCKED. Nexus 3 PASS /
+  16 FAIL / 1 BLOCKED (P18) · Catalyst 14 / 6 · Zabbix 5 / 15 · ONES 7 PASS / 9 FAIL / 3 NA /
+  1 BLOCKED (P16). Not triaged yet with Dev's 5 rules (§7). Known from this run:
+  - 5 FAILs came from the suite, not NCP: follow-up replies lost the connector (zabbix-P06,
+    zabbix-P20, nexus-P13, ones-P10, ones-P15) — fixed by CHANGED 11 (§9.2); re-run below.
+  - Nexus: NCP's Nexus MCP sees no devices (discovery mode, see above) — most Nexus FAILs.
+  - catalyst-P03 — **flaky, not a bug (Dev's rule 4):** conv 3094 FAIL — NCP's "Model (type)"
+    column held Catalyst's `type` ("Cisco Catalyst 3650 Switch Stack"); the source model is
+    `platformId` `WS-C3650-48TQ-S` (IP, serial and version matched). Conv 3066 and 3224 (16:58)
+    gave the platform id and PASSED. Accepting `type` as a model would loosen the check — rule 12.
+  - catalyst-P13 and ones-P08 timed out 3 times at 180 s (9 min each) — now repeated once only.
+- **Re-run of the 7 follow-up tests after §9.2 (16:48, 7 min 30 s,
+  `NCP_MCP_Prompt_Results_20261006_164827`):** zabbix-P06 FAIL → PASS · zabbix-P16 FAIL → NA
+  (its follow-up "#zabbix All devices in Zabbix." kept the connector: 4 × `query_zabbix`) ·
+  ones-P11 NA · nexus-P13 FAIL (NCP's Nexus sees no devices) · ones-P10 FAIL (timed out at
+  120 s twice; the repeat is listed under Retries) · zabbix-P20 FAIL · ones-P15 FAIL. The two
+  open ones:
+  - **zabbix-P20 (conv 3218) — maybe a suite miss, not confirmed:** NCP called
+    `UI_Visualization` and wrote "A bar chart has been generated", but the text has no `ui://`
+    chart reference and no image, so `has_chart` says no chart. Confirm in the NCP UI whether the
+    chart shows; if it does, the chart check must also look at chart widgets that arrive in
+    `ui_resources` without a reference (rule 12: ask Dev first).
+  - **ones-P15 (conv 3221) — a real question the suite took as the answer:** ONES has two
+    devices named `Leaf-1` (10.4.4.64, 10.4.6.11); NCP asked which one, with a small table, and
+    "a table is an answer" (rule from all old suites) stopped the follow-up. Options for Dev: set
+    `DEVICE_ONES` to a unique host (or its IP), or let the auto-pick skip duplicate names.
 
 ### 3.11 Not confirmed — the first probe and smoke runs settle these
 
@@ -330,22 +466,133 @@ Still open: Nexus link list when ND is not in discovery mode · ONES link endpoi
 Expected even when everything works: **ONES P16 BLOCKED** (no link endpoint), **Zabbix P16
 NA or FAIL** (no links in Zabbix), **Nexus P18 BLOCKED** (no temperature in discovery data).
 
+
+### 3.12 Coverage vs Dev's manual test report (2026-10-06)
+
+`docs/AI-NOC Automation vs Manual Test Report - Connector Coverage.xlsx` maps every testcase in the
+connector sheets of `NCP R2.0 Test Report.xlsx` (Dev's master, read only) to P01–P20:
+Covered / Partly covered / Gap - can automate / Next phase / Out of scope, plus a "Gaps to add" list.
+
+| Connector (manual sheet) | Manual TCs | Prompt-level | Covered + partly | Gaps | Automated prompts with no manual TC |
+|---|---|---|---|---|---|
+| Nexus (`Nexus agent to support NetOps`) | 89 | 70 | 43 | 27 | 7 of 20 |
+| Catalyst (` Local MCP center to Catalyst`) | 25 | 0 (all UI / onboarding / container / API) | — | 0 | 20 of 20 |
+| Zabbix (`Zabbix-DC`) | 126 | 112 | 50 | 62 | 3 of 20 |
+| ONES (`AI-NOC-ONES-MCP`) | 64 | 48 | 14 | 34 (+13 next phase) | 11 of 20 |
+
+Highest-value gaps: a "never asks for credentials" check on every answer, a wrong-tag negative
+prompt, Zabbix problems and triggers. ONES alerts are blocked (ONES alert APIs fail). The manual
+ONES run used a different ONES connector than the suite, so results are not directly comparable.
+
+### 3.13 Architecture, inputs and run time (refactor 2026-10-06)
+
+Dev asked (2026-10-06): say where every input comes from and keep data out of code; cut the
+1–2 h run time; make the suite modular and easy to extend. Grading rules did not change
+(rule 12): `checks.py` and `compare.py` only moved — the diff is import lines only.
+
+**Where the suite gets its inputs**
+
+| Input | Comes from | Change it by |
+|---|---|---|
+| Prompts; per row: check, threshold (`Param`), `Tolerance`, `Applies_To`, `Known_Issue`, `Timeout` | `data/mcp_prompts.xlsx`, sheet `prompts` | editing the sheet, or `--excel other.xlsx` |
+| NCP host, user, password, socket URL, the four `#tags` | `.env` → `ncp_suite/settings.py` | `.env` (an environment variable wins) |
+| Source URLs, users, passwords, `NEXUS_DOMAIN`, `ONES_LINKS_PATH` | `.env` | `.env` |
+| Device for `<DEVICE>` | `DEVICE_<KEY>` in `.env`, else picked automatically | `.env` |
+| Tolerances | `CPU_TOL` / `MEM_TOL` / `TEMP_TOL` in `.env`; a row's `Tolerance` wins | `.env` / sheet |
+| Chat tuning | `WS_END_GRACE_SECONDS`, `WS_QUIET_SECONDS`, `CHAT_RETRIES`, `MAX_FOLLOWUPS` | `.env` |
+| Which connectors / prompts run | `--connectors`, `--prompts`, `-k` | command line |
+| Parallel workers | `-n 4 --dist loadgroup` in `pytest.ini` | `-n 0` (serial) on the command line |
+| The right answer | each product's own API, read live during the test | `ncp_suite/truth/<key>.py` |
+| Connector list (key, matrix title, truth class) | `REGISTRY` in `ncp_suite/settings.py` | one row there |
+| Follow-up phrases and replies, timeout keywords | `ncp_suite/chat/policy.py` — behaviour, kept in code on purpose | code + a self-test |
+
+**Layers** — each layer uses only the layers above it:
+
+```
+settings.py · prompts.py · results.py          inputs, and the record of one result
+chat/ · truth/ · grading/                      talk to NCP · read the right answer · compare
+runner.py                                      one prompt x one connector -> PromptResult
+reporting/                                     Excel + HTML from a list of PromptResult
+pytest_plugin.py · conftest.py · test_*.py     pytest only: options, fixtures, outcomes, collection
+```
+
+Only `pytest_plugin.py` imports pytest inside `ncp_suite/`, so the next phase (§7) can reuse
+chat, truth, grading, runner and reporting with a new prompt sheet and new truth modules.
+The "page objects" of this suite are the clients: `NcpChat` for NCP and one `Source` per product.
+
+Fixtures (conftest.py): session `chat` (one login per worker), session `source_for` (one source
+client per connector; inventory cached for the run; HTTP sessions closed at the end); function
+`case` (from `pytest_generate_tests`), `record_result`, `record_probe`.
+
+**How to extend**
+- New connector: one row in `REGISTRY`; `ncp_suite/truth/<key>.py` with a `Source` subclass
+  (`login`, `_devices`, `_metrics`, `_interfaces`, `_links`, `_components`); keys `TAG_<KEY>`,
+  `<KEY>_URL`, `<KEY>_USER`, `<KEY>_PASSWORD` in `.env` and `.env.example`; run the probe. The
+  matrix gets the new column by itself. Raise `-n` to the number of connectors.
+- New prompt of an existing kind: one row in the sheet.
+- New kind of check: one function in `grading/checks.py`, listed in `CHECKS`, plus a good and a
+  bad sample answer in the self-tests (a self-test fails if either is missing).
+- Next phase (§7): a new sheet + new truth modules; `run_case` and both reports work unchanged.
+
+**Run time — measured on 10.4.5.236, 2026-10-06**
+
+Where the time went (before the refactor):
+- ~80 s per prompt, mostly waiting after NCP had already finished. A frame-by-frame capture
+  (one-off script, not part of the suite; conversations 3056, 3059, 3068) showed answers
+  complete at 18 s, 13 s and 26 s, while the suite stopped at 84 s, 123 s and 160 s. Cause:
+  NCP's end frame is `agent_complete`; the suite only knew `agent_completed`, so it fell back to
+  "45 s of silence" — and `new_notification` frames (sent at any time, to every socket of the
+  user) restarted that timer. Beyond speed this is a correctness risk: a correct answer could
+  run into the 240 s deadline and be graded FAIL "timed out".
+- 80 prompts strictly one after another.
+- Not a bottleneck: reading the sources (probe of all four: 23 s; cached per run).
+
+What changed and what it gave:
+
+| Change | Measured effect |
+|---|---|
+| Answer ends on `agent_complete` + 3 s grace; notifications are not activity (CHANGED 8, 9) | smoke `ones-P02`: 107 s → 17 s |
+| 4 workers, one per connector (`xdist_group`) | the four connectors run side by side |
+| Pre-flight check of `.env` keys + NCP login | a wrong setup stops in 0.3 s (exit 2) instead of 80 failed tests |
+| Probe runs in parallel | 23.5 s → 7.4 s |
+| Prompt sheet read once per process | it was re-read on every HTML refresh |
+
+Full 80-test run: **before** ~105 min (measured pace: 13 tests in 24 min; the 20-prompt
+Catalyst run took 31 min) → **after 40 min 26 s** (`NCP_MCP_Prompt_Results_20261006_160711`; for its first ~10 min the old
+run was still sending prompts too, and two prompts spent 3 × 180 s in timeout retries — since
+CHANGED 13 that is at most 2 × 180 s).
+Answers are slower when several chats run at once (P02: 14 s alone, ~29 s with four at once),
+because NCP's LLM is shared — so 4 workers give less than 4×.
+
+Not done — ideas, ask Dev first:
+- More than one worker per connector (`-n 8 --dist load`): faster, but more load on each MCP
+  container and on NCP's LLM.
+- Repeat a FAIL once in a new chat by itself and mark it flaky (Dev's rule 4, §7): changes the
+  result rules, so Dev decides.
+- Keep the `agent_trace` that `agent_complete` already carries (the tool payload: tells "NCP
+  relayed it wrong" from "the tool got wrong data", §9 item 9). Today only the tool names are kept.
+- One WebSocket per conversation instead of a new one per follow-up (§9): wait for a live run
+  that proves it.
+
 ---
 
 ## 4. First live run — what can go wrong and what to do
 
 | You see | Likely cause | Do |
 |---|---|---|
+| `Blank in .env: NCP_PASSWORD, …` and the run stops at once (exit code 2) | the named keys are empty | fill them in `.env` (names are in `.env.example`; ask Dev for values) |
+| `error: unrecognized arguments: -n 4 --dist loadgroup` | `pytest-xdist` not installed (old venv) | `pip install -r requirements.txt` |
 | `Cannot log in to NCP (https://…/api/user/login): …` and the run stops (exit code 2) | `NCP_PASSWORD` blank / wrong, wrong `NCP_HOST`, or host not reachable | log in to the NCP UI with the same user and password from this machine; fix `.env` |
+| You want to watch one prompt live (logs on the console) | runs use 4 workers, which hide live logs | add `-n 0` |
 | Every prompt FAILs with `NCP error: …connect…` / `…refused…` / `…handshake…` | wrong chat WebSocket URL | set `NCP_WS_URI=wss://<host>:9001/api/v1/ws` (older builds) and run the smoke test again |
-| Every prompt FAILs with `NCP error: timed out after …s` | NCP slow or the stream never ends | try one prompt; look at the answer in `report.html`; tell Dev before raising timeouts |
+| Every prompt FAILs with `NCP error: timed out after …s` | NCP slow or the stream never ends | try one prompt; look at the answer in the run's HTML report; tell Dev before raising timeouts |
 | Answers ignore the connector or ask "which data source?" every time | wrong `#tag` | copy the exact tag from the connector list in the NCP UI into `TAG_*` |
 | Probe: `devices` = `ERROR … 401/403` | user / password / domain | check `.env`; for Nexus try `NEXUS_DOMAIN=local` |
-| Probe: `ERROR … 404` on a path | the endpoint path differs on this build | look at the `raw` section of the snapshot; fix the path in `truth/<source>.py` |
-| Probe: kind `OK` but values empty / `None` (e.g. CPU) | the field name differs | find the real field in the `raw` sample; add it to the `pick(...)` name list in `truth/<source>.py`; run `pytest` (self-tests) and the probe again |
+| Probe: `ERROR … 404` on a path | the endpoint path differs on this build | look at the `raw` section of the snapshot; fix the path in `ncp_suite/truth/<source>.py` |
+| Probe: kind `OK` but values empty / `None` (e.g. CPU) | the field name differs | find the real field in the `raw` sample; add it to the `pick(...)` name list in `ncp_suite/truth/<source>.py`; run `pytest` (self-tests) and the probe again |
 | Probe: `NO_TRUTH` | the suite could not read that data | the matching prompts will be BLOCKED — not an NCP bug. Fix the source client if the product has the data |
 | Probe: `UNSUPPORTED` | the product has no such data | expected for Zabbix links; the prompt is NA if NCP says so |
-| Zabbix login error mentioning `user` / `username` / `auth` | Zabbix API version handling | check `apiinfo.version` in the snapshot `raw`; fix the version rule in `truth/zabbix.py` |
+| Zabbix login error mentioning `user` / `username` / `auth` | Zabbix API version handling | check `apiinfo.version` in the snapshot `raw`; fix the version rule in `ncp_suite/truth/zabbix.py` |
 | `<DEVICE>` prompts BLOCKED: `DEVICE override … not found` | `DEVICE_<CONNECTOR>` does not match a device name or IP | fix or blank it in `.env` |
 | A FAIL you think is wrong | could be our check or our field mapping | read Reason + Expected + the NCP answer in **Details**; do not loosen the check (rule 12); tell Dev |
 
@@ -359,7 +606,7 @@ report it as flaky, not as a bug.
 
 1. The 4 snapshots: `reports/snapshots/*.json` (no passwords inside; still internal data).
 2. The probe console summary (one line per connector).
-3. `reports/NCP_MCP_Prompt_Results_<time>.xlsx` and `reports/report.html` from the full run.
+3. `reports/NCP_MCP_Prompt_Results_<time>.xlsx` and `.html` from the full run.
 4. Every code change: file + one line why (also logged in §12).
 5. Every `.env` value that differs from the defaults in §3.7 — **except passwords**:
    NCP host, WS URL, tags, `NEXUS_DOMAIN`, `DEVICE_*`, tolerances.
@@ -400,7 +647,7 @@ MCP-suite connectors use on the box you test is not confirmed (§3.11).
 ## 7. Next phase (planned, not built): the 10 AI NOC use cases
 
 Plan file: `AI-NOC-Prompt-Validation-Use-Cases.xlsx` (this folder). Same runner: each area
-becomes one more `truth/<source>.py` and one more prompt sheet. In scope: **ONES (most
+becomes one more `ncp_suite/truth/<source>.py` and one more prompt sheet. In scope: **ONES (most
 important), DCGM, Dynamo, BCM.** Run:ai is deferred. The "seed prompts" files are Dev's
 manual test sheets — ask him for them.
 
@@ -531,7 +778,37 @@ because of prefix caching. Bands: ≤85 Compliant, ≤90 Warning, >90 Fail.
 ## 9. Code reuse from `Automation 2/` (Dev's instruction, 2026-09-29)
 
 Already applied to the current suite — you do **not** need `Automation 2/` to run or fix it.
-This section matters when you build the next phase (§7); ask Dev for the folder then.
+This section matters when you build the next phase (§7). On Dev's Mac the folder is
+`/Users/devendra/Downloads/Automation 2/`; ask Dev for it if you need it. The latest wording of
+the reuse instruction is in §2.1; the 2026-09-29 wording and correction below still apply.
+
+### 9.1 Baseline — what `Automation 2/` already has (inspected 2026-10-06)
+
+| Suite | What it covers | How it is built | Ground truth |
+|---|---|---|---|
+| `USECASE-AUTOMATION-2026` | NCP chat prompts on the SQL / metrics-DB path. `use_case_prompt_sql_query6.1.xlsx`: Flow Analytics 223, Audit Report 220, NetOps 234, Simple Inventory 225, Upgrade Compliance 220 rows (Prompt + SQL_Query) | one parametrised `test_main.py::test_automation` from the Excel sheets (`pytest_generate_tests`), session fixtures in `conftest.py`, WebSocket chat + follow-ups in `ai_core.py`; LLM / "both sides have data" compare | SQL on the metrics DB (`ts_*` tables loaded by `t1.py` — never run it, §9 item 6) |
+| `DC-INVENTORY` | inventory prompts per connector — `catalyst.xlsx`, `nexus.xlsx`, `ones.xlsx` (30 each), NetBox, `all.xlsx`; prompts end with `where dataconnector_tags='<source>'` | same USECASE shape (`ai_core.py`, `conftest.py`), `FinalReport_<source>.xlsx` | SQL on the metrics DB; NetBox via `netbox_pandas_router.py` |
+| `Ticketing` | ServiceNow / Zendesk prompts | same shape; per-connector reports | JSON snapshots from `fetch.py` / `fetch_zendesk.py` |
+| `flowrecords_syslog` | ELK / Splunk flow + syslog prompts | same shape; splits the pytest-html report per connector (`_split_html_report_by_connector`) | `elk_pandas_router.py` over generated data |
+| `API-AUTOMATION-2026` | network inventory via ONES REST | `api_client.py` (`get_ones_token`, `fetch_ones_*`) | ONES REST |
+| `API-VALIDATION` | NCP Swagger-exposed APIs only — not AI NOC (rule 4) | `api_client.py`, `get_websocket_response.py` | — |
+| `playwright-UI-Automation` | UI — another engineer (rule 6) | Playwright, page objects | — |
+
+All of them point at the old box 10.4.5.10. Reports: Excel (`FinalReport*.xlsx`, `_ai_summary.csv`,
+`_failed_prompts.xlsx`) plus a **plain pytest-html `report.html`** (Result / Test / Duration only;
+the prompt, answer and verdict are only in each test's captured stdout).
+
+**Do not duplicate:** DC-INVENTORY already asks inventory questions (device list, platforms,
+serials, hwsku, uptime) for Catalyst / Nexus / ONES on the **metrics-DB path** (SQL truth,
+`dataconnector_tags` filter). The MCP suite asks similar questions through the **Local MCP
+connectors**, with each product's own API as truth — a different path, so not a duplicate. Do
+not copy DC-INVENTORY's SQL-backed prompts into this suite, and do not re-test USECASE's flow /
+audit / NetOps / upgrade-compliance sheets here.
+
+**Reused in the MCP suite:** the WebSocket message flow, follow-up detection and replies, login,
+retries (`ncp_suite/chat/`); Excel-driven `pytest_generate_tests` and the session report hook
+(`conftest.py`, `ncp_suite/pytest_plugin.py`); ONES REST calls (`ncp_suite/truth/ones.py`); the per-connector report idea from
+`flowrecords_syslog` (here: one HTML with a connector column and a matrix instead of split files).
 
 **The instruction, as Dev gave it:**
 
@@ -562,7 +839,7 @@ simplify the functions while keeping the core logic intact.
 - Put the origin at the top of each file that is based on old code, e.g.
   `# Based on: Automation 2/USECASE-AUTOMATION-2026/ai_core.py (_collect_ws_response, simplified)`.
 - Small, clear functions with plain names and type hints. Use `logging`, not `print`. One
-  place for config (`config.py` + `.env`).
+  place for config (`ncp_suite/settings.py` + `.env`).
 - When the new version behaves differently from the old one (not just shorter), say so in a
   one-line code comment and tell Dev in plain words what changed and why.
 - Check the simplified code still does what the old code did on the same input before
@@ -589,7 +866,7 @@ simplify the functions while keeping the core logic intact.
 
 | # | Old behaviour | What to do | Status |
 |---|---|---|---|
-| 1 | every old suite targets 10.4.5.10 | host from `NCP_HOST` in `.env` (default 10.4.5.62) | done |
+| 1 | every old suite targets 10.4.5.10 | host from `NCP_HOST` in `.env` (no default in code since 2026-10-06) | done |
 | 2 | `new_conversation` sends no `project_id` → admin chat only | add it; **field name not confirmed** — capture it from one live project chat's WebSocket frames | open (`NCP_PROJECT_ID` exists, not wired) |
 | 3 | WS helper gets `conversation_id` but does not return it | return it (to read `messages.agent_trace`) | done (`ChatResult.conversation_id`, in the report) |
 | 4 | `get_dynamic_timeout` gives audits 180 s | use 600 s for audit prompts | next phase |
@@ -597,17 +874,84 @@ simplify the functions while keeping the core logic intact.
 | 6 | **`t1.py` — never run it.** `--run-updater` defaults to True and TRUNCATEs `ts_*` tables, loading synthetic rows; on 10.4.5.62 that wipes the ONES API ground truth | never copy or run it | rule |
 | 7 | `ai_compare_responses` / `fallback_comparison` pass when "both sides have data" and override an LLM FAIL to PASS | strict compare | done |
 | 8 | EMPTY_MATCH passes "none found" | answer must say "not available" | done (`Unsupported` → NA / FAIL) |
-| 9 | nothing reads the tool payload | small helper reading `messages.agent_trace` | next phase |
+| 9 | nothing reads the tool payload | small helper reading `messages.agent_trace` | partly: tool names kept per answer (CHANGED 10); `agent_complete` also carries `agent_trace` — not kept yet |
 
 **Improvement candidates — status**
 
 - JWT fetched per conversation → cached for the run, refetched on an auth error — **done**.
 - Follow-up answers written by an LLM → fixed replies — **done** (§3.3).
-- Hosts and passwords hard-coded → `config.py` + `.env` — **done**.
+- Hosts and passwords hard-coded → `ncp_suite/settings.py` + `.env` — **done** (no lab addresses in code since 2026-10-06).
 - Two retry styles (5 fixed tries vs 7 with backoff) → one retry loop with backoff — **done**.
 - Each follow-up reply opens a new WebSocket connection → one connection per conversation —
   **not done** (kept the old, proven behaviour; change only after a live run proves it works).
-- Timeout chosen by keywords in the prompt → per-row timeout column — **not done**.
+- Timeout chosen by keywords in the prompt → per-row timeout column — **done** (optional `Timeout`
+  column; keyword rule when blank).
+- Answer end by silence only → end on the end frame (`agent_complete`) — **done** (CHANGED 8, §3.13).
+- One prompt at a time → the four connectors side by side (pytest-xdist) — **done** (§3.13).
+- Each follow-up reply opens a new WebSocket connection — **kept on purpose**: measured
+  2026-10-06, the same connection does not keep the connector either (§9.2); the tag does.
+
+### 9.2 Second pass over `Automation 2/` (2026-10-06): what was taken, what was left
+
+Dev asked: take follow-up handling, runbook flow and modular patterns from USECASE (primary),
+request handling / response parsing / schema checks from API-AUTOMATION-2026 and API-VALIDATION,
+and anything useful from DC-INVENTORY, flowrecords_syslog, Ticketing — without bloat.
+Not read: playwright-UI-Automation (+ zip), Automation_final_reports, Automation_flow_charts,
+Automation_documents. Nothing in `Automation 2/` was changed or run.
+
+**Facts found (all four chat suites and API-VALIDATION's `get_websocket_response.py`):**
+- Same WebSocket flow as ours; end of answer = `agent_completed` / `agent_stopped` /
+  `end_message` only — the same `agent_complete` gap fixed here in CHANGED 8.
+- Follow-up detection is the same in all four (table > 6 `|` → answer; 1 phrase + "?" or
+  2 phrases → follow-up); replies are a fixed fast path for "which data source" and an LLM
+  otherwise; a follow-up goes on a new connection; no state is kept between turns except the
+  conversation id. The metrics-DB reply never needed a `#tag` — copying it for the MCP
+  connectors (tag in brackets) is what broke our follow-ups (below).
+- Retries: 5 or 7 attempts on any error incl. "timed out", fixed 2 s or 3 s × n wait.
+- API suites: no `requests.Session`, no HTTP retry, no re-login on 401, no request timeouts;
+  schema checks are hand-written "required keys" tuples copied into each test.
+- No old suite reads the tool payload / `agent_trace`. NCP's REST export
+  (`GET /api/v1/conversations/{id}/export?file_format=txt`) is plain text with no trace either —
+  `agent_complete` on the WebSocket is still the only place the trace was seen.
+- Hard-coded passwords sit in several old config files (API-VALIDATION/config.py,
+  API-AUTOMATION-2026/config.py, every `get_jwt_token`) — not copied; ours stay in `.env`.
+
+**Live evidence for the follow-up fix (NCP 10.4.5.236, 2026-10-06):** in the full run
+(`NCP_MCP_Prompt_Results_20261006_160711`) every follow-up that needed a new tool call came back
+"the <X> connector isn't available / configured" (zabbix-P06, zabbix-P20, nexus-P13, ones-P10,
+ones-P15). Test with turn 2 needing a new Zabbix call (one conversation each):
+"Use the Zabbix connector (#zabbix) for this. Show CPU…" → connector lost, new connection
+(conv 3206) and same connection (3205); "#zabbix Show CPU…" → CPU table for 22 of 23 devices
+(3204). So the tag must be the first word; the connection does not matter.
+
+**Taken (shorter, in our own code):**
+
+| From | What | Where now |
+|---|---|---|
+| (our live test, above) | every follow-up reply starts with the connector `#tag` | `chat/policy.py` CHANGED 11 |
+| DC-INVENTORY `handle_conversation_with_followup` | a definite "no data" answer is final — no follow-up | `chat/policy.py` `NO_DATA_PHRASES` |
+| Ticketing `is_followup_question` | an image / chart in the answer means it is an answer | `chat/policy.py` |
+| USECASE + all suites `is_followup_question` | phrases `it will be paginated`, `another specific`, `don't have a defined`, `metrics database`, `query_metrics` | `FOLLOWUP_PHRASES` |
+| Ticketing | scoping phrases (`how would you like`, `we need to decide`, …), "shall I retry" phrases, `which interface` | `FOLLOWUP_PHRASES` |
+| USECASE `generate_refined_prompt` (LLM rule "always ask for the complete data set") | "which interface?" → "All interfaces on <device>." (fixed text) | `followup_reply` |
+| USECASE / flowrecords / Ticketing `test_main.py` retry loops | retry by kind; answer timeout repeated once (Dev's rule 4); repeats reported | `chat/client.py` CHANGED 13 |
+| API-VALIDATION `get_ncp_token` | token from `data.token`, then `token` / `access_token` | `chat/client.py` CHANGED 14 |
+| USECASE / Ticketing `conftest.py` `clean_illegal_chars` | strip control characters before Excel | `reporting/excel.py` |
+| USECASE / Ticketing `_failed_prompts.xlsx` | FAIL triage sheet (in the same workbook) | `reporting/excel.py` "Failures" |
+| API-VALIDATION required-keys checks | one guard: device rows without a name → left out; none named → NoTruth | `truth/base.py` |
+| (missing in the API suites — built new, small) | GET retry on connection errors and 502/503/504; re-login once on 401 | `truth/base.py` |
+
+**Left out, and why:** LLM-written follow-up replies (not repeatable) · LLM judges and the
+FAIL→PASS promotions in `ai_compare_responses` / `fallback_comparison` (they pass wrong answers;
+rule 12) · keyword routers (`*_pandas_router.py`; our `Check` column already names the truth
+query) · collection-time API calls (API-AUTOMATION conftest: a failing source silently gives zero
+tests) · splitting the pytest-html JSON per connector (our matrix has a column per connector) ·
+time-range reply copied from the prompt (Ticketing; our prompts ask for latest values — next
+phase, §7 AINOC-P10) · snapshot cache with TTL (Ticketing; our truth is read live) · cleanup
+trackers (we write nothing) · `report_generator.py` (REST-flow format) · `t1.py` (destructive).
+
+**Open — Dev to decide (§11 q10):** the old suites disagree on "no data" answers: DC-INVENTORY
+stops (taken here), flowrecords / Ticketing send a follow-up and try again.
 
 ---
 
@@ -648,6 +992,12 @@ The first live run (§0 steps 4–6) answers 6 and helps with 7.
    so these correct answers FAIL (seen 2026-10-06, conversations 2996, 2997). Proposed rule:
    a device counts as listed only if NCP's own value for it is above the threshold (or it
    is named with no value). Not changed — waiting for Dev (rule 12).
+9. Parallel runs (§3.13): is it fine to send up to 4 chats at once to NCP 10.4.5.236 during a
+   regression run (its LLM is shared)? It is the default now; `-n 0` goes back to one at a time.
+   And may we try 2 workers per connector (`-n 8 --dist load`)?
+10. Follow-up after a definite "no data" answer (§9.2): the suite now stops there (as
+    DC-INVENTORY did) and grades that answer (NA if the product has no such data, else FAIL).
+    flowrecords / Ticketing sent a follow-up instead. Keep it this way?
 
 ---
 
@@ -690,3 +1040,52 @@ Add one line per change: date, who, what, why.
   `truth/nexus.py`: fall back to `lan-discovery` switches / interfaces, links from neighbours,
   metrics read fresh. `truth/ones.py`: cpu / mem empty = no such data, temp falls back to
   `psutemp`, duplicate hostnames merged (freshest reachable row wins).
+- **2026-10-06 (Dev + Claude)** — Complete HTML report per run (Dev could not see all prompts
+  in the old `reports/report.html`: same file for every run, so a later `pytest` / probe run
+  overwrote it; rows showed only the test id; nothing until the run ended). New
+  `html_report.py`; `conftest.py` sets the file name per run, adds Connector / Prompt / NCP
+  result / Reason columns, a details block per test and the result matrix + counts on top;
+  `report.py` shares the run's time stamp with the xlsx; `pytest.ini` drops the fixed `--html`
+  and sets `generate_report_on_test = true`. 2 self-tests added (56). Checked end to end with a
+  fake NCP and fake sources: 80 rows + matrix in one file. `.env.example`: NCP_HOST and tags set
+  to the confirmed 10.4.5.236 values. Dev's standing instructions added (§2.1) and the
+  `Automation 2/` baseline (§9.1). Prometheus / DCGM prompt list (Dev's master sheet, updated):
+  `data/NCP Automation Master Sheet - Data-Connectors-GPU-Metrics (updated).csv` — next phase.
+- **2026-10-06 (Dev + Claude)** — Compared the four connector sheets of `NCP R2.0 Test Report.xlsx`
+  with P01–P20: `docs/AI-NOC Automation vs Manual Test Report - Connector Coverage.xlsx` (§3.12).
+  No code changed; the master sheet was only read.
+- **2026-10-06 (Dev + Claude)** — Refactor for inputs, run time and structure (§3.13). Code moved
+  into the package `ncp_suite/` (settings, prompts, results, runner, chat/, truth/, grading/,
+  reporting/, pytest_plugin); `test_main.py`, `test_sources.py`, `conftest.py` stay at the top,
+  so all commands are the same. `checks.py` / `compare.py` / `truth/*` changed in import lines
+  only (grading unchanged, rule 12). Fixes and behaviour changes: answer ends on
+  `agent_complete` + 3 s grace (CHANGED 8: NCP's real end frame; answers done at 13–26 s were
+  collected until 84–160 s); frames of other conversations dropped and notifications not
+  counted as activity (CHANGED 9); tool names kept per answer (CHANGED 10, report column
+  "Tools called"). New: `pytest-xdist`, `-n 4 --dist loadgroup` with one worker per connector;
+  results pass to the main process in `user_properties`; pre-flight check of `.env` + NCP login;
+  `PromptResult` record instead of a dict; no lab addresses or tags as defaults in code;
+  connectors from one `REGISTRY` table; optional `Timeout` column; optional `.env` keys
+  `WS_END_GRACE_SECONDS`, `WS_QUIET_SECONDS`, `CHAT_RETRIES`, `MAX_FOLLOWUPS`; images named with
+  the worker pid; probe summary printed at the end; self-signed TLS warning filtered in
+  `pytest.ini`. 10 self-tests added (66). Measured: smoke 107 s → 17 s, probe 23.5 s → 7.4 s,
+  full run ~105 min → 40 min 26 s.
+- **2026-10-06 (Dev + Claude)** — Second pass over `Automation 2/` (USECASE, API-AUTOMATION-2026,
+  API-VALIDATION, DC-INVENTORY, flowrecords_syslog, Ticketing; UI and report/doc folders not read;
+  nothing there changed or run) — §9.2. `chat/policy.py`: follow-up replies start with the `#tag`
+  (CHANGED 11; measured: the tag in brackets loses the connector, conv 3204–3206); no follow-up
+  after a definite "no data" answer (DC-INVENTORY) or an image (Ticketing) (CHANGED 12); more
+  detection phrases (USECASE, Ticketing); "which interface?" → "All interfaces on <device>."
+  `chat/client.py`: retries by kind — connection errors up to 3 attempts, answer timeout / empty
+  answer repeated once (`ANSWER_RETRIES`, Dev's rule 4), every repeat kept in the result
+  (CHANGED 13); login token fallback (CHANGED 14). `truth/base.py`: GET retry on connection errors
+  and 502/503/504, re-login once on 401, nameless device rows left out (none named → NoTruth).
+  `reporting/`: "Retries" column and HTML row, "Failures" sheet, control characters stripped.
+  5 self-tests added (71). Grading rules unchanged (rule 12). Open question §11 q10.
+- **2026-10-06 (Dev + Claude)** — Report shows the source next to NCP's answer (Dev: "add the source
+  result too with the NCP answer"). New `ncp_suite/grading/source_view.py`: per check, a table of
+  the source data it compared (devices / metric values / interfaces / links / fans + PSUs), taken
+  from the source client's cache, so the values are the graded ones. `PromptResult.source`; HTML
+  details show "NCP answer" and "Source (ground truth)" side by side; Excel Details and Failures
+  get a "Source data" column. Grading unchanged. 1 self-test added (72). Checked live:
+  catalyst-P03 (conv 3224).

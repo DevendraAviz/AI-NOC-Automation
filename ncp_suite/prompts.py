@@ -1,4 +1,8 @@
-"""Load the prompt sheet (data/mcp_prompts.xlsx, sheet 'prompts')."""
+"""Load the prompt sheet (data/mcp_prompts.xlsx, sheet 'prompts').
+
+CHANGED: optional `Timeout` column (seconds per prompt). Blank = the keyword rule in
+chat/policy.py, as before.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -17,6 +21,7 @@ class PromptRow:
     applies_to: frozenset = frozenset()   # connector keys; empty = all
     known_issue: str = ""
     notes: str = ""
+    timeout: int | None = None        # seconds to wait for NCP's answer; None = keyword rule
 
     def applies(self, connector: str) -> bool:
         return not self.applies_to or connector in self.applies_to
@@ -39,9 +44,11 @@ def load_prompts(path: Path) -> list[PromptRow]:
         if not r.get("id") or not r.get("prompt"):
             continue
         applies = {x.strip().lower() for x in str(r.get("applies_to") or "").split(",") if x.strip()}
+        timeout = _f(r.get("timeout"))
         out.append(PromptRow(
             id=str(r["id"]).strip(), prompt=str(r["prompt"]).strip(), check=str(r.get("check") or "").strip(),
             param=_f(r.get("param")), tol=_f(r.get("tolerance")), applies_to=frozenset(applies - {"all"}),
             known_issue=str(r.get("known_issue") or "").strip(), notes=str(r.get("notes") or "").strip(),
+            timeout=int(timeout) if timeout else None,
         ))
     return out

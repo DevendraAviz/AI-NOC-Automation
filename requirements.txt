@@ -1,5 +1,6 @@
 pytest>=8
 pytest-html>=4
+pytest-xdist>=3.6
 requests>=2.31
 websockets>=14
 openpyxl>=3.1

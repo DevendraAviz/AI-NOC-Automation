@@ -8,6 +8,12 @@ Two errors matter, and they lead to different results:
                  Result: NA if it does, FAIL if it answers with data anyway.
   NoTruth     -> we could not read the truth (endpoint unknown, HTTP error, field missing).
                  Result: BLOCKED. Says nothing about NCP.
+
+HTTP (CHANGED 2026-10-06; the old api_client.py files had no retry and no re-login at all):
+  GETs are retried twice on connection errors and HTTP 502 / 503 / 504 (1 s, 2 s); not on 500,
+  which Nexus in discovery mode returns on purpose. A 401 logs in again once (tokens can expire
+  in a long run). Device rows without a name are dropped with a warning; if none has a name the
+  payload shape changed -> NoTruth (API-VALIDATION's "required keys" check, done once here).
 """
 from __future__ import annotations
 
@@ -19,8 +25,10 @@ from typing import Any, Callable
 
 import requests
 import urllib3
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
-from config import Connector
+from ncp_suite.settings import Connector
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 log = logging.getLogger("truth")
@@ -176,6 +184,10 @@ class Source:
         self.base = conn.url.rstrip("/")
         self.http = requests.Session()
         self.http.verify = False
+        retry = Retry(total=2, connect=2, read=0, status=2, backoff_factor=1, allowed_methods={"GET"},
+                      status_forcelist=(502, 503, 504), raise_on_status=False)
+        for scheme in ("http://", "https://"):
+            self.http.mount(scheme, HTTPAdapter(max_retries=retry))
         self.raw: dict[str, Any] = {}          # endpoint -> sample payload (for the probe)
         self._cache: dict[str, tuple[float, Any]] = {}
         self._logged_in = False
@@ -204,9 +216,15 @@ class Source:
 
     # ---- public API (cached) -------------------------------------------------
     def devices(self) -> list[Device]:
-        devs = self._cached("devices", self._devices)
-        if not devs:
+        rows = self._cached("devices", self._devices)
+        if not rows:
             raise NoTruth(f"{self.title}: device list is empty")
+        devs = [d for d in rows if d.name.strip()]
+        if not devs:
+            raise NoTruth(f"{self.title}: none of the {len(rows)} device rows has a name (payload changed? "
+                          "check the snapshot)")
+        if len(devs) < len(rows):
+            log.warning("%s: %d device rows without a name left out", self.title, len(rows) - len(devs))
         return devs
 
     def metric(self, kind: str, fresh: bool = True) -> dict[str, float]:
@@ -325,10 +343,11 @@ class Source:
     def request(self, method: str, path: str, *, record: str | None = None, **kw) -> Any:
         self.ensure_login()
         url = path if path.startswith("http") else self.base + path
-        try:
-            resp = self.http.request(method, url, timeout=self.TIMEOUT, **kw)
-        except requests.RequestException as exc:
-            raise NoTruth(f"{method} {path}: {type(exc).__name__}: {exc}") from exc
+        resp = self._send(method, url, path, **kw)
+        if resp.status_code == 401:               # token expired during the run: log in again, once
+            self._logged_in = False
+            self.ensure_login()
+            resp = self._send(method, url, path, **kw)
         if resp.status_code >= 400:
             raise NoTruth(f"{method} {path}: HTTP {resp.status_code} {resp.text[:160]!r}")
         try:
@@ -338,5 +357,14 @@ class Source:
         self.raw[record or f"{method} {path.split('?')[0]}"] = sample(data)
         return data
 
+    def _send(self, method: str, url: str, path: str, **kw) -> requests.Response:
+        try:
+            return self.http.request(method, url, timeout=self.TIMEOUT, **kw)
+        except requests.RequestException as exc:
+            raise NoTruth(f"{method} {path}: {type(exc).__name__}: {exc}") from exc
+
     def get(self, path: str, **kw) -> Any:
         return self.request("GET", path, **kw)
+
+    def close(self) -> None:
+        self.http.close()
