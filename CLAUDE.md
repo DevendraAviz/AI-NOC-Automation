@@ -174,6 +174,7 @@ this file is unchanged; the code lives in the package `ncp_suite/`.
 | File | Job |
 |---|---|
 | `README.md` | short run instructions (same steps as §0) |
+| `docs/RUNBOOK.md` | one-page runbook for anyone running the suite: prerequisites, setup, run commands, options, results, troubleshooting |
 | `pytest.ini` | plain `pytest` = offline self-tests only; `-n 4 --dist loadgroup` (4 workers); markers `probe`, `offline`; html report |
 | `conftest.py` | one test per prompt × connector (each tagged `xdist_group(<connector>)`); fixtures `chat` (logs in once per worker), `source_for`, `record_result`, `record_probe` |
 | `test_main.py` | the prompt test: `run_case()` → map PASS / FAIL / NA / BLOCKED / XFAIL to pytest |
@@ -1089,3 +1090,5 @@ Add one line per change: date, who, what, why.
   details show "NCP answer" and "Source (ground truth)" side by side; Excel Details and Failures
   get a "Source data" column. Grading unchanged. 1 self-test added (72). Checked live:
   catalyst-P03 (conv 3224).
+- **2026-10-06 (Dev + Claude)** — `docs/RUNBOOK.md` added: short runbook (prerequisites, setup,
+  run order, CLI options, reports, troubleshooting, rules) for anyone running the suite. No code changed.
