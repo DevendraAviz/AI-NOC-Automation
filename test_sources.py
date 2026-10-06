@@ -1,0 +1,29 @@
+"""Probe: read each ground-truth source directly (no NCP). Run this first on a new setup.
+
+Saves reports/snapshots/<connector>.json: what each data kind returned (OK / UNSUPPORTED /
+NO_TRUTH / ERROR), a few normalised rows, and raw samples of every endpoint called —
+enough to fix field names without guessing.
+
+Run:  pytest test_sources.py            or   pytest test_sources.py -k ones
+"""
+from __future__ import annotations
+
+import json
+
+import pytest
+
+import config
+
+
+@pytest.mark.probe
+def test_source(connector, source_for):
+    src = source_for(connector)
+    snap = src.snapshot()
+    folder = config.REPORT_DIR / "snapshots"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{connector.key}.json"
+    path.write_text(json.dumps(snap, indent=2, default=str), encoding="utf-8")
+    summary = {k: v["status"] + (f" ({v['count']})" if "count" in v else "") for k, v in snap["kinds"].items()}
+    print(f"\n{connector.title}: {summary}\n  device for <DEVICE> prompts: {snap.get('device_for_prompts')}"
+          f"\n  snapshot: {path}")
+    assert snap["kinds"]["devices"]["status"] == "OK", snap["kinds"]["devices"].get("detail")

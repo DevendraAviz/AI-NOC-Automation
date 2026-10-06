@@ -1,0 +1,5 @@
+pytest>=8
+pytest-html>=4
+requests>=2.31
+websockets>=14
+openpyxl>=3.1
