@@ -5,8 +5,9 @@ Based on: test_main.py test_prompt / _finish (2026-10-06) — same steps, moved 
 """
 from __future__ import annotations
 
+from ncp_suite import settings
 from ncp_suite.chat import ChatResult, NcpChat
-from ncp_suite.grading.checks import Ctx, Verdict, evaluate
+from ncp_suite.grading.checks import METRIC_CHECKS, Ctx, Verdict, evaluate
 from ncp_suite.grading.judge import second_opinion
 from ncp_suite.grading.source_view import source_view
 from ncp_suite.prompts import PromptRow
@@ -28,14 +29,25 @@ def run_case(row: PromptRow, conn: Connector, chat: NcpChat, src: Source) -> Pro
         prompt = prompt.replace("<DEVICE>", device.name)
     sent = f"{conn.tag} {prompt}".strip()
 
-    answer = chat.ask(sent, context={"connector": conn.title, "tag": conn.tag,
-                                     "device": device.name if device else ""}, timeout=row.timeout)
+    # metric prompts: sample the source while NCP answers (values move; CHANGED 2026-10-07)
+    windowed = row.check in METRIC_CHECKS
+    if windowed:
+        src.begin_window(settings.METRIC_POLL_SECONDS)
+    try:
+        answer = chat.ask(sent, context={"connector": conn.title, "tag": conn.tag,
+                                         "device": device.name if device else "",
+                                         "device_ip": device.ip if device else ""}, timeout=row.timeout)
+    finally:
+        if windowed:
+            src.end_window()
     verdict = evaluate(Ctx(row, src, answer.text, answer.has_image, device), answer.error)
     judge = ""
     if row.check in JUDGE_CHECKS and verdict.status in ("PASS", "FAIL"):
         judge = second_opinion(sent, answer.text, verdict.expected)
     result = _result(row, conn, sent, device, verdict, answer, judge)
     result.source = source_view(row.check, src, device)     # after grading: shows the values that were graded
+    if windowed:
+        src.clear_window()                                   # the next prompt reads fresh values again
     return result
 
 

@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import time
+from collections import Counter
 from dataclasses import asdict, dataclass
 from typing import Any, Callable
 
@@ -91,7 +93,7 @@ class Component:
 # small helpers
 # ---------------------------------------------------------------------------
 GOOD = {"ok", "up", "true", "1", "healthy", "normal", "reachable", "good", "online",
-        "connected", "available", "operational", "in-sync", "insync", "fine"}
+        "connected", "available", "operational", "in-sync", "insync", "fine", "on", "enabled"}
 BAD = {"down", "false", "0", "unhealthy", "critical", "major", "unreachable", "poor",
        "offline", "failed", "fail", "fault", "faulty", "error", "notfunctioning",
        "not ok", "notok", "unavailable", "shutdown", "degraded", "alarm", "timeout"}
@@ -193,6 +195,11 @@ class Source:
         self._logged_in = False
         self._login_error = ""
         self._device: Device | None = None
+        self._window: list[dict[str, dict]] = []      # metric samples taken while NCP answered
+        self._window_start = 0.0
+        self._poller: threading.Thread | None = None
+        self._stop = threading.Event()
+        self._lock = threading.Lock()
 
     # ---- to implement -----------------------------------------------------
     def login(self) -> None:  # pragma: no cover - per product
@@ -228,15 +235,78 @@ class Source:
         return devs
 
     def metric(self, kind: str, fresh: bool = True) -> dict[str, float]:
-        """name -> value for kind in cpu|mem|temp. Fresh by default (values move)."""
-        data = self._cached("metrics", self._metrics, ttl=0 if fresh else None)
-        values = {n: v[kind] for n, v in data.items() if v.get(kind) is not None}
+        """name -> value for kind in cpu|mem|temp. Fresh by default (values move); inside a
+        sampling window: the last sample (taken right after the answer)."""
+        data = self._window[-1] if self._window else self._cached("metrics", self._metrics, ttl=0 if fresh else None)
+        return self._check_values(kind, {n: v[kind] for n, v in data.items() if v.get(kind) is not None})
+
+    def metric_snapshots(self, kind: str) -> list[dict[str, float]]:
+        """One {name: value} per sample of the window, oldest first (one fresh read if no window)."""
+        snaps = [{n: v[kind] for n, v in s.items() if v.get(kind) is not None} for s in self._window]
+        snaps = [s for s in snaps if s] or [self.metric(kind)]
+        self._check_values(kind, snaps[-1])
+        return snaps
+
+    def metric_samples(self, kind: str) -> dict[str, list[float]]:
+        """name -> every value the source gave for kind during the window: each sample's value
+        plus alternatives the source lists under '<kind>_alt' (e.g. every temperature sensor).
+        NCP's value is right when it is within tolerance of any of them."""
+        snaps = self._window or [self._cached("metrics", self._metrics, ttl=0)]
+        out: dict[str, list[float]] = {}
+        for s in snaps:
+            for name, v in s.items():
+                for x in [v.get(kind), *(v.get(f"{kind}_alt") or [])]:
+                    if x is not None and x not in out.setdefault(name, []):
+                        out[name].append(x)
+        out = {n: vals for n, vals in out.items() if vals}
+        self._check_values(kind, out)
+        return out
+
+    def device_samples(self, dev: Device, kind: str) -> list[float]:
+        """Extra readings for one device during the window (per-device endpoints). Default none."""
+        return []
+
+    def _check_values(self, kind: str, values: dict) -> dict:
         if not values:
             label = {"cpu": "CPU", "mem": "memory", "temp": "temperature"}[kind]
             if kind in self.EMPTY_MEANS_UNSUPPORTED:
                 raise Unsupported(label)
             raise NoTruth(f"{self.title}: no {label} values in the source payload")
         return values
+
+    # ---- sampling window (metric prompts; runner.py) ---------------------------------------
+    def begin_window(self, every: float) -> None:
+        """Sample the metrics now and every `every` seconds until end_window(). Values move
+        (CPU, memory, temperature; ONES 10.20.0.37 changes them every 30 s), and NCP's tool read
+        them at some point during the answer — so the answer is compared with all samples."""
+        self.end_window()
+        self._window, self._window_start = [], time.time()
+        self._take_sample()
+        self._stop = threading.Event()
+        self._poller = threading.Thread(target=self._poll, args=(every,), daemon=True)
+        self._poller.start()
+
+    def end_window(self) -> None:
+        if self._poller:
+            self._stop.set()
+            self._poller.join(timeout=self.TIMEOUT)
+            self._poller = None
+            self._take_sample()                     # right after the answer, as before
+
+    def clear_window(self) -> None:
+        self.end_window()
+        self._window, self._window_start = [], 0.0
+
+    def _poll(self, every: float) -> None:
+        while not self._stop.wait(every):
+            self._take_sample()
+
+    def _take_sample(self) -> None:
+        with self._lock:
+            try:
+                self._window.append(self._metrics())
+            except Exception as exc:                # a failed sample is skipped; the checks see the rest
+                log.debug("%s: metric sample failed: %s", self.title, exc)
 
     def interfaces(self, dev: Device) -> list[Interface]:
         raw_items = self._cached(f"if:{dev.name}", lambda: self._interfaces(dev))
@@ -262,8 +332,10 @@ class Source:
         return items
 
     def device_for_prompts(self) -> Device:
-        """The device used for <DEVICE> prompts: the .env override, else the first
-        device (by name) that has interfaces."""
+        """The device used for <DEVICE> prompts: the .env override, else the first device
+        (by name) that has a unique name, is usable (`_usable_for_prompts`) and has interfaces.
+        CHANGED 2026-10-07: duplicate names are skipped — ONES has two `Leaf-1`, and NCP asked
+        "which one?" in ones-P09 / P13 / P14 / P15 (10.4.5.10, conv 341, 370, 371, 372)."""
         if self._device:
             return self._device
         devs = sorted(self.devices(), key=lambda d: d.name.lower())
@@ -274,15 +346,27 @@ class Source:
                 raise NoTruth(f"DEVICE override '{self.conn.device}' not found in {self.title}")
             self._device = match[0]
             return self._device
-        for dev in devs[:8]:
+        names = Counter(low(d.name) for d in devs)
+        unique = [d for d in devs if names[low(d.name)] == 1] or devs
+        tried = 0
+        for dev in unique:
+            if tried >= 15:
+                break
             try:
+                if not self._usable_for_prompts(dev):
+                    continue
+                tried += 1
                 if self.interfaces(dev):
                     self._device = dev
                     return dev
             except (NoTruth, Unsupported):
                 continue
-        self._device = devs[0]
+        self._device = unique[0]
         return self._device
+
+    def _usable_for_prompts(self, dev: Device) -> bool:
+        """Extra rule for the auto-picked device (a source can prefer reachable devices with data)."""
+        return True
 
     def snapshot(self) -> dict:
         """Everything the checks would use, with per-kind status. Used by the probe."""

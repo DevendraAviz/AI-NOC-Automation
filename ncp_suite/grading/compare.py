@@ -14,7 +14,12 @@ NOT_AVAILABLE = (
     "cannot retrieve", "can't retrieve", "could not retrieve", "couldn't retrieve", "no information",
     "not exposed", "isn't available", "is not available", "no metrics", "not provided",
     "no such data", "not collected", "isn't collected", "no records", "not reported",
+    # seen 2026-10-07 (ones-P12, 9 Nexus answers): "I wasn’t able to retrieve ..."
+    "wasn't able to", "was not able to", "weren't able to", "not able to retrieve", "not able to pull",
+    "unable to retrieve", "unable to pull", "couldn't get", "could not get",
 )
+# "does not currently expose memory metrics" (ones-P12): a word between the verb and "expose"
+NOT_AVAILABLE_RE = re.compile(r"\b(?:does|do|did)(?:n't| not)\s+(?:\w+\s+)?(?:expose|provide|report|collect|support|return)\b")
 NONE_PATTERNS = (
     r"\bno (?:\w+ ){0,2}(?:devices?|interfaces?|links?|issues|problems|alerts|ports?)\b",
     r"\bnone\b", r"\bthere (?:are|is) no\b", r"\bnot? (?:any|find any|found)\b",
@@ -23,7 +28,8 @@ NONE_PATTERNS = (
 )
 BAD_WORDS = ("down", "unreachable", "critical", "major", "unhealthy", "fail", "fault", "error",
              "poor", "degraded", "not ok", "offline", "alarm", "warning", "minor", "abnormal",
-             "shutdown", "unavailable", "problem", "issue", "❌", "🔴")
+             "shutdown", "unavailable", "problem", "issue", "❌", "🔴",
+             "offenv")                 # Cisco PSU "offEnvPower (5)" (zabbix-P17, conv 359; 2026-10-07)
 IF_PREFIX = (("tengigabitethernet", "te"), ("twentyfivegige", "twe"), ("fortygigabitethernet", "fo"),
              ("hundredgigabitethernet", "hu"), ("hundredgige", "hu"), ("gigabitethernet", "gi"),
              ("fastethernet", "fa"), ("port-channel", "po"), ("portchannel", "po"),
@@ -37,8 +43,9 @@ def low(s) -> str:
 
 # NCP's LLM writes hostnames with non-breaking hyphens (U+2011) and numbers with narrow no-break
 # spaces (U+202F). They look like "-" and " " but do not match them. En / em dashes are left as is.
-_PLAIN = str.maketrans({"‐": "-", "‑": "-", " ": " ", " ": " ", " ": " ",
-                        "​": None})
+# Curly apostrophes (U+2018 / U+2019, "wasn’t") become "'" so the wording lists match (2026-10-07).
+_PLAIN = str.maketrans({"\u2010": "-", "\u2011": "-", "\u00a0": " ", "\u2007": " ", "\u202f": " ",
+                        "\u200b": None, "\u2018": "'", "\u2019": "'"})
 
 
 def plain(text: str) -> str:
@@ -47,8 +54,8 @@ def plain(text: str) -> str:
 
 # ---- wording ------------------------------------------------------------------
 def says_not_available(text: str) -> bool:
-    t = low(text)
-    return any(p in t for p in NOT_AVAILABLE)
+    t = low(plain(text))
+    return any(p in t for p in NOT_AVAILABLE) or bool(NOT_AVAILABLE_RE.search(t))
 
 
 def says_none(text: str) -> bool:
@@ -176,8 +183,13 @@ def clauses_about(text: str, names: list[str]) -> list[str]:
     return [p for p in parts if any(mentions(p, n) for n in names)]
 
 
+TIME_OR_DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}(?:[T ]\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?Z?)?\b"
+                          r"|\b\d{1,2}:\d{2}(?::\d{2})?\b")
+
+
 def numbers(s: str) -> list[float]:
     s = re.sub(r"\b\d+(?:\.\d+){3}\b", " ", str(s or ""))          # drop IP addresses
+    s = TIME_OR_DATE.sub(" ", s)            # drop dates and times ("as of 2026-10-07 05:39 UTC" -> not 5)
     # stand-alone numbers only: not the "1" in leaf-1, Eth1/1 or 10.4.6.11
     return [float(x) for x in re.findall(r"(?<![\w.\-/])-?\d+(?:\.\d+)?(?![\w\-/]|\.\d)", s)]
 
@@ -186,9 +198,12 @@ def integers(s: str) -> set[int]:
     return {int(x) for x in numbers(s) if float(x).is_integer()}
 
 
-def value_for(text: str, names: list[str], words: tuple[str, ...], whole_text: bool = False) -> float | None:
+def value_for(text: str, names: list[str], words: tuple[str, ...], whole_text: bool = False,
+              unit: str = "") -> float | None:
     """Number reported for an entity: the matching column of its table row, else the
-    number after the metric word on a line that names it."""
+    number after the metric word on a line that names it (whole_text: anywhere in the answer).
+    CHANGED 2026-10-07 (zabbix-P09, conv 333): every mention of the word is tried, not only the
+    first, and a number carrying the unit ("18.4 %") wins over one without ("4 080 189 440 B")."""
     for row in table_rows(text):
         if any(mentions(row_text(row), n) for n in names):
             for col, cell in row.items():
@@ -199,14 +214,20 @@ def value_for(text: str, names: list[str], words: tuple[str, ...], whole_text: b
     scopes = [ln for ln in (text or "").splitlines() if any(mentions(ln, n) for n in names)]
     if whole_text:
         scopes.append(text or "")
+    unit_re = re.compile(rf"(?<![\w.\-/])(-?\d+(?:\.\d+)?)\s*{re.escape(unit)}") if unit else None
     for scope in scopes:
-        s = low(scope)
+        s = TIME_OR_DATE.sub(" ", low(scope))
+        first_any = None
         for w in words:
-            i = s.find(w)
-            if i >= 0:
-                found = numbers(s[i + len(w):i + len(w) + 60])
-                if found:
-                    return found[0]
+            for m in re.finditer(re.escape(w), s):
+                window = s[m.end():m.end() + 60].split("\n")[0]       # same line only
+                if unit_re and (u := unit_re.search(window)):
+                    return float(u.group(1))
+                found = numbers(window)
+                if found and first_any is None:
+                    first_any = found[0]
+        if first_any is not None:
+            return first_any
     return None
 
 

@@ -5,8 +5,8 @@ receives this folder — and their Claude — can start work without any other f
 history. Everything needed to run the current suite is here or in `README.md`.
 
 Owner: **Dev (Devendra Shekhawat)**, QA, Aviz Networks. Send results and questions to him.
-Created: 2026-09-29. Last updated: 2026-10-06 (refactor: `ncp_suite/` package, answer-end fix,
-parallel runs — §3.13).
+Created: 2026-09-29. Last updated: 2026-10-07 (suite on NCP 10.4.5.10; ONES source 10.20.0.37;
+partial pass, sampling window, longer timeouts, Zabbix / ONES truth fixes — §3.5, §3.10, §12).
 
 ---
 
@@ -21,17 +21,21 @@ an Excel matrix **and an HTML report** — the same layout as Dev's test sheet:
 all four connectors probed and run (§3.10). Refactored the same day (§3.13): the code is now a
 package (`ncp_suite/`), an answer ends on NCP's real end frame, and the four connectors run side
 by side. A full 80-test run went from ~105 min (measured pace) to 40 min.
-Still open: §3.11 and §11. **Next session: start with §0.1 (to do — debug the FAILs).**
+**2026-10-07: the suite now targets NCP 10.4.5.10** (Dev's request; the four connectors were
+re-created there with new tags — §3.10). **Nexus: every FAIL has one cause, on Nexus Dashboard, not
+NCP** (§3.10). Still open: §3.11 and §11. **Next session: start with §0.1 (to do — debug the FAILs).**
 
 **What you need**
 - Python **3.10+** (built on 3.10.12; also run on 3.14.0) and `pip`.
-- A machine on the lab network that reaches NCP (`10.4.5.236`, the box with all four
-  connectors — set in `.env`) **and** the four
+- A machine on the lab network that reaches NCP (`10.4.5.10` since 2026-10-07, before that
+  `10.4.5.236` — set in `.env`) **and** the four
   systems: Nexus Dashboard `10.20.11.3` (https), Catalyst Center `10.4.5.230` (https),
-  Zabbix `10.4.4.177:8088` (http), ONES `10.4.4.181` (https).
+  Zabbix `10.4.4.177:8088` (http), ONES `10.20.0.37` (https; `10.4.4.181` before 2026-10-07).
 - The NCP login password for user `superadmin` (`NCP_PASSWORD` — blank in `.env`; ask Dev).
-- The `#tag` of each connector as configured in NCP. On 10.4.5.236: `#Nexus-mcp`, `#mcp-cat`,
-  `#zabbix`, `#ONES-MCP` (case-sensitive; already in `.env.example`).
+- The `#tag` of each connector as configured in NCP. On 10.4.5.10 (2026-10-07): `#nexus-mcp`,
+  `#catalyst-mcp`, `#zabbix`, `#ones-37-mcp` (ONES 10.20.0.37; `#ones-mcp` there is ONES 10.4.4.181).
+  Copy them exactly as the NCP UI shows them. The tag's connector and `ONES_URL` must point at the
+  same ONES — check `GET /api/v1/data_connectors` (host per tag).
 
 **Steps — in this order**
 
@@ -39,7 +43,7 @@ Still open: §3.11 and §11. **Next session: start with §0.1 (to do — debug t
 |---|---|---|
 | 1 | `python3 -m venv .venv` then `source .venv/bin/activate` (Windows: `.venv\Scripts\activate`) then `pip install -r requirements.txt` | packages installed (incl. `pytest-xdist`) |
 | 2 | Check `.env` is in the folder. If missing: copy `.env.example` to `.env` and ask Dev for the values. Fill `NCP_PASSWORD`; check `NCP_HOST`, `TAG_NEXUS`, `TAG_CATALYST`, `TAG_ZABBIX`, `TAG_ONES` | — |
-| 3 | `pytest` (no arguments = offline self-tests only, no network) | `72 passed` in ~6 s. If not, stop — it is a Python / package problem, not the lab |
+| 3 | `pytest` (no arguments = offline self-tests only, no network) | `90 passed` in ~15 s. If not, stop — it is a Python / package problem, not the lab |
 | 4 | `pytest test_sources.py` (reads the 4 systems directly, no NCP) | 4 passed in ~8 s; one summary line per connector at the end; files `reports/snapshots/<connector>.json` |
 | 5 | Open each snapshot. Every data kind shows `OK`, `UNSUPPORTED`, `NO_TRUTH` or `ERROR` (§4 says what to do) | devices `OK` for all 4 |
 | 6 | Smoke test, one prompt on one connector: `pytest test_main.py --connectors ones --prompts P02` | one result in ~20 s; NCP login and chat work |
@@ -56,6 +60,13 @@ logs `-n 0` (use it to debug one prompt).
 ---
 
 ## 0.1 To do next session — debug the FAILs (written 2026-10-06, Dev: "tomorrow")
+
+**Update 2026-10-07:** the suite now runs on NCP **10.4.5.10** (§3.10). Every conversation id and
+run named below is from **10.4.5.236** — look them up there, not on 10.4.5.10. Nexus (B) is done.
+The first full run on 10.4.5.10 is triaged in §3.10 (table under "Full run on 10.4.5.10"): it confirms
+A.4, A.5 and A.8 and adds five confirmed suite misses — start there. **Afternoon 2026-10-07: those
+five misses, A.4 (any sensor counts), A.5 (Processor pool), A.8 (unique device + IP in the
+follow-up) and the Zabbix part of A.3 (value maps) are fixed; ONES now runs on 10.20.0.37** (§3.10).
 
 **Where things stand.** Code + docs committed locally (`ed1e748` refactor, then the runbook
 commit). Dev's account cannot push to `vishakh-aviz/AI-NOC-Automation` (403): the plan is a fork
@@ -95,12 +106,16 @@ rule 1 needs to tell "NCP relayed it wrong" from "the tool returned wrong data".
 7. **zabbix-P20 / nexus-P20** — "no chart" although NCP called `UI_Visualization` (conv 3218, 3166):
    check the saved message's `ui_resources`; confirm in the NCP UI whether a chart shows (§3.10).
 8. **ones-P15** — two devices named `Leaf-1` (conv 3221): set `DEVICE_ONES` to a unique host / IP
-   or let the auto-pick skip duplicate names (Dev to choose).
+   or let the auto-pick skip duplicate names (Dev to choose). Still open on 10.4.5.10: the probe of
+   2026-10-07 again picked `<DEVICE>` = `Leaf-1`.
 9. **ONES P18** — "not reported" (conv 3202): ONES only fills PSU temperature (§3.11 open question).
 10. **ONES P01** — missing `Spine-2` (conv 3087): old/duplicate device in ONES inventory?
 
 **B. Likely NCP-side — confirm with the tool payload, then report to Dev:**
-- **Nexus (16 FAIL):** NCP's Nexus MCP sees 0 devices (ND in discovery mode, §3.10). One issue, not 16.
+- **Nexus — DONE, diagnosed 2026-10-06 (§3.10):** one cause, on Nexus Dashboard, not NCP. ND's
+  LAN-Fabric service is down, so the `manage` / `lan-fabric` APIs the MCP reads return 0 switches or
+  HTTP 500; the 4 switches exist only in ND's `lan-discovery` inventory, which the MCP never calls.
+  NCP passes on the tool result correctly. Waiting on Dev: fix ND, or ask the MCP team for a fallback (§11 q11).
 - **ONES P07 / P09 / P10:** NCP gave CPU values although ONES has none ("possible invented data").
 - **Catalyst P14** misses down ports (also conv 2999, 3008) and **P15** shows a sample only (also
   3000, 3009) — repeated, so candidate bugs. **Catalyst P11 / P12:** the §11 q8 rule (Dev).
@@ -258,26 +273,32 @@ this file is unchanged; the code lives in the package `ncp_suite/`.
 | `ncp_suite/reporting/html.py` | the HTML report parts: result matrix (Dev's layout + counts) and the details block of each test |
 | `ncp_suite/pytest_plugin.py` | options `--connectors`, `--prompts`, `--excel`; pre-flight check; collects results from all workers; HTML columns; Excel at the end |
 | `data/mcp_prompts.xlsx` | the 20 prompts |
-| `selftest/test_offline.py` | 72 offline tests: every check with a good and a bad answer, NA/BLOCKED, fake NCP chat (follow-up with the tag first, table widget, `agent_complete` end, notification noise, another chat's frames, answer timeout repeated once), follow-up rules, runner, source view, source 401 re-login and nameless rows, settings, prompt sheet, Excel (incl. Failures sheet, control characters), HTML |
+| `selftest/test_offline.py` | 90 offline tests (72 before 2026-10-07; added: partial pass on / off, wrong data still fails under partial pass, cut-off answer graded, timestamps / units in P09, "wasn’t able to" wording, sampling window + temperature alternatives, unique device pick, "which one?" follow-up with the IP, cut-off answer not repeated, Zabbix value maps / memory pool / offEnvPower). Before that: every check with a good and a bad answer, NA/BLOCKED, fake NCP chat (follow-up with the tag first, table widget, `agent_complete` end, notification noise, another chat's frames, answer timeout repeated once), follow-up rules, runner, source view, source 401 re-login and nameless rows, settings, prompt sheet, Excel (incl. Failures sheet, control characters), HTML |
 | `AI-NOC-Prompt-Validation-Use-Cases.xlsx` | plan for the next phase (10 AI NOC use cases, §7) — not built yet |
 | `reports/` | generated, git-ignored: snapshots, the run's `.html` + `.xlsx`, `images/` (charts NCP returned) |
 
 ### 3.3 What one test does
 
 1. Take one prompt row and one connector. If the prompt has `<DEVICE>`, pick the device
-   (`DEVICE_<CONNECTOR>` in `.env`, else the first device by name that has interfaces).
+   (`DEVICE_<CONNECTOR>` in `.env`, else the first device by name that has a unique name, has
+   interfaces and — ONES — is reachable and has CPU data).
 2. Send `"<#tag> <prompt>"` over the NCP chat WebSocket (admin chat).
 3. If NCP asks a follow-up question, answer with a fixed reply (max 3 follow-ups). **Every reply
    starts with the connector `#tag` as its own word** (without it NCP loses the connector — §9.2):
    data source / tool / connector → "<#tag> Use the <connector> connector for this." ·
    which interface / port → "<#tag> All interfaces on <device>." ·
-   which device → "<#tag> Device <name>." · time range → "<#tag> Use the latest values." ·
+   which device → "<#tag> Device <name> (management IP <ip>)." (the IP since 2026-10-07: it tells
+   same-named devices apart) · time range → "<#tag> Use the latest values." ·
    anything else → "<#tag> Yes, please go ahead for all devices using the <connector> connector."
    Not a follow-up (the answer is final): a table (> 6 `|`), an image or chart (`![…]`, saved
    image), long number-heavy text, or a definite "no data" answer ("wasn't able to", "no data",
    "not available", "there are no", … — `NO_DATA_PHRASES` in `ncp_suite/chat/policy.py`).
-4. Read the ground truth from the source **right after** the answer (CPU / memory /
-   temperature are read fresh; inventory is cached for the run).
+   Exception (2026-10-07): a "which one would you like … ?" question with a small table (≤ 8 table
+   lines) of candidate devices IS a follow-up (`DISAMBIGUATION`; ONES "two devices named Leaf-1").
+4. Read the ground truth from the source **right after** the answer (inventory is cached for the
+   run). Metric prompts (P07–P12, P18): the source is sampled when the prompt is sent, every
+   `METRIC_POLL_SECONDS` (20 s) while NCP answers, and right after; NCP's value passes if it is
+   within tolerance of any sample (since 2026-10-07 — values move; Dev's rule 2).
 5. Grade with the row's check → PASS / FAIL / NA / BLOCKED / XFAIL, with a reason and the
    expected value.
 6. Record it (`PromptResult` in the test's `user_properties`); the main process collects all
@@ -307,10 +328,13 @@ rows come in `ui_resources[].structuredContent {title, columns, rows}` on `agent
 the saved message. The suite writes each referenced widget into the answer as a markdown table;
 if the stream did not carry it, it reads the saved message (`load_messages`).
 
-Timeouts: the row's `Timeout` column (seconds) if set; else 240 s if the prompt has chart /
-plot / graph / report / summary / health; 180 s for list / table / all / interfaces / counters /
-each; else 120 s. Only if NCP sends no end frame, the answer ends after 45 s of silence
-(`WS_QUIET_SECONDS`) once text has arrived.
+Timeouts: the row's `Timeout` column (seconds) if set; else 360 s if the prompt has chart /
+plot / graph / report / summary / health; 300 s for list / table / all / interfaces / counters /
+each; else 180 s (raised 2026-10-07 from 240 / 180 / 120 — Dev: "if 180 s is not enough, increase
+it"). Only if NCP sends no end frame, the answer ends after 45 s of silence
+(`WS_QUIET_SECONDS`) once text has arrived. An answer still cut off by the timeout is graded on the
+text that had arrived (the reason says so) and is not repeated; only an answer with no text is
+repeated once.
 
 Retries (each starts a new conversation; waits 2 s, then 4 s):
 - **Connection problems** (connect / refused / reset / closed / handshake / auth / no
@@ -336,9 +360,26 @@ answers with data. `NoTruth` (we could not read it) → BLOCKED.
 
 ### 3.5 Grading rules (ncp_suite/grading/checks.py)
 
+- **Partial pass (Dev, 2026-10-07: "don't be too strict whether NCP is pushing out full data …
+  if a bit of data is given and matches the source truth, pass it").** `PARTIAL_PASS=1` (default):
+  a list answer that shows only part of the data PASSES when nothing it shows is wrong; the reason
+  starts with `partial:` and names what was not shown. Applies to P01, P03–P08, P11–P20 lists
+  (devices, fields, versions, models, unhealthy devices, values, interfaces, down interfaces,
+  counters, links, fans / PSUs, health summary). Still FAIL: a wrong value or count, an invented
+  device, a shown column with wrong values (e.g. a "Model" column holding the device type), a
+  device that is shown but not flagged although the source has it unhealthy / faulty, and an
+  answer with none of the data. `PARTIAL_PASS=0` restores "every source item must be shown".
+  Note: this also passes repeated misses such as catalyst-P14 (`GigabitEthernet1/0/3` never
+  listed) — read the "not shown" part of `partial:` reasons.
 - Numbers are compared by code, never by an LLM. Tolerances (absolute, in `.env`):
   `CPU_TOL=10`, `MEM_TOL=3`, `TEMP_TOL=3`. Threshold prompts (P11 / P12) use a grey zone of
-  ±tol around the threshold: devices inside it may be listed or not.
+  ±tol around the threshold: devices inside it may be listed or not. A value is right when it is
+  within tolerance of any source sample taken during the answer (§3.3 step 4), or of an
+  alternative the source lists (`<kind>_alt`: every Zabbix temperature sensor; ONES CPU / PSU /
+  SSD temperature). Single-device values (P09): dates and times are not read as numbers, and a
+  number with its unit (`%`, `°C`) wins (zabbix-P09 read "05" from "05:39 UTC").
+- An answer cut off by our timeout is graded on the text that arrived ("NCP timed out after
+  …; graded the text that had arrived" in the reason).
 - Before grading, look-alike characters in the answer become plain ones: non-breaking hyphen
   U+2010/U+2011 → `-`, no-break spaces U+00A0/U+2007/U+202F → space (NCP's LLM writes hostnames
   as `leaf‑01`). En / em dashes are left as they are. The report keeps NCP's raw text.
@@ -347,7 +388,10 @@ answers with data. `NoTruth` (we could not read it) → BLOCKED.
 - Only stand-alone numbers are read from the answer (digits inside hostnames, interface
   names or IPs are ignored).
 - "NCP said not available / none" when the source has data → always FAIL, said in the reason.
-- **Health** uses each product's own signal: ONES device status · Nexus operStatus / status ·
+  The wording list (`NOT_AVAILABLE` in `compare.py`) also knows "wasn't able to", "unable to
+  retrieve", "does not currently expose" and curly apostrophes (since 2026-10-07, ones-P12).
+- **Health** uses each product's own signal: ONES `healthstatus` + `reason` from devices-health
+  (since 2026-10-07; inventory `status` before) · Nexus operStatus / status ·
   Catalyst reachability + `overallHealth` ≤ 3 · Zabbix interface availability + active
   triggers with severity ≥ 3. This may differ from what NCP calls "unhealthy" — read the
   reason before calling it a bug (open question 7, §11).
@@ -359,10 +403,10 @@ answers with data. `NoTruth` (we could not read it) → BLOCKED.
 
 | Connector | Ground truth | Notes |
 |---|---|---|
-| ONES | `https://10.4.4.181` — `/api/user/login` `{username,password,extendedExpiry:false}` (raw token in `Authorization`), `/api/inventory/Devices` (+ `device-details?mac=`), `/api/health/devices-health` (fallback `/api/Health/DeviceList`), `/api/inventory/Devices/interfaces?filter={"deviceAddress":<mac>}`, `/api/inventory/componentMega` (FansList / PsuList) | No link endpoint known → P16 BLOCKED unless `ONES_LINKS_PATH` is set. CPU / memory null for every device → "no such data". Temperature = `cputemp`, else `psutemp` |
-| Nexus Dashboard | `https://10.20.11.3` — `POST /login {userName,userPasswd,domain}` (tries `NEXUS_DOMAIN`, then DefaultAuth, then local); NDFC `/appcenter/cisco/ndfc/api/v1/` + `lan-fabric/rest/inventory/allswitches`, `…/interface/detail`, `…/control/links`, `lan-discovery/inventory/modules` | 10.20.11.3 is in Fabric Discovery mode: falls back to `lan-discovery/inventory/switches` and `…/inventory/interfaces`; links built from each port's `connToSwitchName` / `connToInterfaceIfName` |
+| ONES | `https://10.20.0.37` (since 2026-10-07; `10.4.4.181` before) — `/api/user/login` `{username,password,extendedExpiry:false}` (raw token in `Authorization`); the endpoints the ONES MCP tools call (Dev's list "ones apis - Sheet1.csv"): `/api/inventory/devices` (+ `device-details?mac=`), `/api/health/devices-health` (fallback `/api/Health/DeviceList`; CPU, memory, temperature, `healthstatus` + `reason`), `/api/inventory/device-ports?filter={"deviceAddress":<mac>}`, `/api/fabric/components-summary` (fallback `/api/inventory/componentMega`), and for one device `/api/health/device-system?macAddress=` and `/api/misc/devicebulk-health?macAddress=` (P09). FM write tools never called | 10.20.0.37: 109 devices (4 fabrics; 6 named "unnamed"), 95 reachable with CPU / memory, 41 unhealthy by `healthstatus`, 10 PSUs `status False`, no fan status. Its per-device time series are **simulated** — new random CPU / memory / temperature every 30 s — so P09 accepts any reading from the answer window. No link endpoint known → P16 BLOCKED unless `ONES_LINKS_PATH` is set. 10.4.4.181: CPU / memory null → "no such data"; temperature = `psutemp` |
+| Nexus Dashboard | `https://10.20.11.3` — `POST /login {userName,userPasswd,domain}` (tries `NEXUS_DOMAIN`, then DefaultAuth, then local); NDFC `/appcenter/cisco/ndfc/api/v1/` + `lan-fabric/rest/inventory/allswitches`, `…/interface/detail`, `…/control/links`, `lan-discovery/inventory/modules` | 10.20.11.3 is in Fabric Discovery mode: falls back to `lan-discovery/inventory/switches` and `…/inventory/interfaces`; links built from each port's `connToSwitchName` / `connToInterfaceIfName`. Column map: name `logicalName`, IP `ipAddress`, model `model` (also used as platform — ND leaves `platform` empty), serial `serialNumber`, version `release`, health `status` ("timeout" = unhealthy). NCP's Nexus MCP reads other paths (`manage/*`, `analyze/*`, `lan-fabric`), never `lan-discovery` — §3.10 |
 | Catalyst Center | `https://10.4.5.230` — `/dna/system/api/v1/auth/token` (basic auth) → `X-Auth-Token`; intent API `network-device`, `device-health`, `interface/network-device/{id}`, `topology/physical-topology`, `network-device/{id}/equipment?type=Fan` (and `PowerSupply`) | Temperature = `device-health` `avgTemperature` ÷ 100 (raw is hundredths of °C — inferred from the values, not documented) |
-| Zabbix | `http://10.4.4.177:8088/api_jsonrpc.php` JSON-RPC — `apiinfo.version` decides `username` vs `user` (≥ 5.4) and Bearer header vs `auth` field (≥ 6.4); `host.get`, `item.get` on template keys (`system.cpu.util`, `vm.memory.util`, `sensor.*`, `net.if.*`), `trigger.get` (min severity 3) | No links in Zabbix → Unsupported (NA if NCP says so). Empty temp / components / interfaces → Unsupported |
+| Zabbix | `http://10.4.4.177:8088/api_jsonrpc.php` JSON-RPC — `apiinfo.version` decides `username` vs `user` (≥ 5.4) and Bearer header vs `auth` field (≥ 6.4); `host.get`, `item.get` on template keys (`system.cpu.util`, `vm.memory.util`, `sensor.*`, `net.if.*`), `trigger.get` (min severity 3) | No links in Zabbix → Unsupported (NA if NCP says so). Empty temp / components / interfaces → Unsupported. NCP's Zabbix connector on 10.4.5.10 logs in with an API token; the suite still uses user / password (`truth/zabbix.py` has no token login) — same server, same data. Since 2026-10-07: CPU / memory also from `sonic.snmp.cpu.util` / `sonic.snmp.mem.util` (Dell SONiC) and `fgate.cpu.util` / `fgate.memory.util` (Fortinet); Cisco memory = the "Processor" pool; fan / PSU status read through the item's value map (`up` / `on` / `normal` / `ok` / `enabled` good; `down` / `off…` faulty; `notPresent` / `disabled` / unmapped = no verdict); temperature = the hottest sensor, every sensor accepted |
 
 TLS: all sources and NCP use self-signed certificates; the suite does not verify them.
 
@@ -375,9 +419,9 @@ work on the lab today are in `.env.example`.
 
 | Key | Default | What |
 |---|---|---|
-| `NCP_HOST` · `NCP_PASSWORD` | required (prompt runs) | NCP under test (10.4.5.236 today) |
+| `NCP_HOST` · `NCP_PASSWORD` | required (prompt runs) | NCP under test (10.4.5.10 since 2026-10-07; 10.4.5.236 before) |
 | `NCP_USER` | superadmin | NCP login user |
-| `NCP_WS_URI` · `NCP_LOGIN_URL` | `wss://<NCP_HOST>/api/v1/ws` · `https://<NCP_HOST>/api/user/login` | older builds used `wss://<host>:9001/api/v1/ws` |
+| `NCP_WS_URI` · `NCP_LOGIN_URL` | `wss://<NCP_HOST>/api/v1/ws` · `https://<NCP_HOST>/api/user/login` | older builds used `wss://<host>:9001/api/v1/ws`; 10.4.5.236 and 10.4.5.10 both use 443 (9001 refused) |
 | `NCP_PROJECT_ID` | blank | project chat — **not wired yet** (field name not confirmed); leave blank |
 | `TAG_NEXUS` · `TAG_CATALYST` · `TAG_ZABBIX` · `TAG_ONES` | required (prompt runs) | the `#tag` that routes a prompt to that connector — **check in NCP** (case-sensitive) |
 | `<KEY>_URL` · `<KEY>_USER` · `<KEY>_PASSWORD` (KEY = NEXUS, CATALYST, ZABBIX, ONES) | required (prompt runs and probe) | each source system; Zabbix URL without `/index.php` |
@@ -385,6 +429,8 @@ work on the lab today are in `.env.example`.
 | `ONES_LINKS_PATH` | blank | optional ONES link endpoint |
 | `DEVICE_NEXUS` … `DEVICE_ONES` | blank = auto | device (name or IP) for `<DEVICE>` prompts |
 | `CPU_TOL` · `MEM_TOL` · `TEMP_TOL` | 10 · 3 · 3 | compare tolerances (a row's `Tolerance` wins) |
+| `PARTIAL_PASS` | 1 | partial answers that match PASS ("partial: …"); 0 = every item must be shown (§3.5) |
+| `METRIC_POLL_SECONDS` | 20 | metric prompts: sample the source this often while NCP answers (§3.3) |
 | `WS_END_GRACE_SECONDS` | 3 | after the end frame, wait this long for late content |
 | `WS_QUIET_SECONDS` | 45 | only if NCP sends no end frame: silence after text = answer done |
 | `CHAT_RETRIES` · `ANSWER_RETRIES` · `MAX_FOLLOWUPS` | 3 · 1 · 3 | attempts per prompt on connection errors · repeats when NCP gave no answer in time / an empty one · follow-ups answered per prompt |
@@ -517,6 +563,101 @@ follow-up and a table widget) and a fake ONES REST passed, including the Excel r
     devices named `Leaf-1` (10.4.4.64, 10.4.6.11); NCP asked which one, with a small table, and
     "a table is an answer" (rule from all old suites) stopped the follow-up. Options for Dev: set
     `DEVICE_ONES` to a unique host (or its IP), or let the auto-pick skip duplicate names.
+
+**Nexus — root cause found (2026-10-06 evening, NCP 10.4.5.236, Dev + Claude).** All Nexus FAILs are
+one problem, on Nexus Dashboard, not in NCP. Checked in the three layers (§7):
+- **Layer 1 — what ND serves** (ND 4.0.1i at 10.20.11.3; plain `curl`, from Dev's Mac and from the
+  NCP box — same result): `/api/v1/manage/inventory/switches` → 200 with **0 switches** (at times 500);
+  `/api/v1/manage/fabrics` and `/fabricsSummary` → 500 `dcnm-lan-fabric.cisco-ndfc.svc:9443 … connection
+  refused`; `/api/v1/manage/fabrics/ncp-ai/switches` → 0 switches; every
+  `/appcenter/cisco/ndfc/api/v1/lan-fabric/rest/*` → 500 "problem proxying the request";
+  `…/lan-discovery/inventory/switches` → 200 with the **4 switches** (fabric `ncp-ai`).
+- **Layer 2 — what the MCP calls** (`docker logs` on the NCP box): container
+  `ncp-nexus-dashboard-mcp-nexus-mcp`, image `aviz/ncp-nexus-dashboard-mcp:v2.0.0`, healthy, points at
+  10.20.11.3 as `superadmin`, login works (no 401). It calls only `manage/*` and `analyze/*` — never
+  `lan-discovery`. NCP's own `*_ndfc` tools (e.g. `get_switch_summary_ndfc`) call `lan-fabric` → 500.
+- **Layer 3 — agent_trace** (conv 3243, 3244, and 3293 exported from the UI): the sub-agent's
+  `manage_listAllSwitches` returned `{"meta":{"counts":{"total":0}},"switches":[]}`, byte for byte what ND
+  serves; NCP's answer ("0 devices") matches the tool result. NCP relays it correctly.
+- **Cause:** ND's LAN-Fabric (NDFC controller) service is down, so the switches exist only in ND's
+  Fabric Discovery inventory, which the MCP does not read. Not the cause: connector config, `#tag`,
+  network path. **Fix (owner to decide, §11 q11):** an ND admin restores LAN-Fabric and puts fabric
+  `ncp-ai` under management, or the MCP team adds a `lan-discovery` fallback.
+- The connector had been re-created at 12:02 UTC (id 144, tag `nexus-mcp`, lowercase). `#Nexus-mcp`
+  still routed to it (conv 3244), so tag case did not matter here; `.env` `TAG_NEXUS` was set to
+  `#nexus-mcp` to match the UI.
+- **Nexus-only re-run** (`NCP_MCP_Prompt_Results_20261006_173842`, 19 min): 2 PASS, 17 FAIL, 1 BLOCKED
+  (P18, no temperature in ND's data). Every FAIL answer names the same empty or failing calls; no
+  timeouts or retries; follow-ups kept the connector. P06 PASSED in the 16:07 run (NCP used an
+  anomaly-score tool) and FAILED here (empty switch list) — the old PASS depended on which tool NCP
+  picked. **P11 / P12 PASS are hollow:** NCP had no switch data (P11 quoted the ND controller's own
+  CPU, 26 %; P12 said it could not get data) and passed only because no switch is above the threshold
+  (§11 q12). P07 also quoted the controller's CPU. P15 got one all-zero row (`counter_data_available: false`).
+- Also seen on 10.4.5.236 that evening, not a cause: 9 leftover `aviz/ncp-nexus-dashboard-collector:v2.0.0`
+  containers (random names, up 57 min to 3 days); ncp-api logs `Total MCP tools mapped: 0` after
+  `Registered 27 local tools` (meaning not known — MCP tools still run). The Zabbix and ONES connectors
+  were no longer on 10.4.5.236.
+
+**2026-10-07 — suite moved to NCP 10.4.5.10 (Dev's request).** Login `superadmin` works; socket
+`wss://10.4.5.10/api/v1/ws` (:9001 refused). Connectors (`GET /api/v1/data_connectors`; all Local MCP,
+created 2026-10-07 05:07–05:24 UTC, containers running):
+
+| Tag | Name | Points at |
+|---|---|---|
+| `#nexus-mcp` | NEXUS-DASHBOARD-MCP | https://10.20.11.3, user superadmin |
+| `#catalyst-mcp` | CATALYST-CENTER-MCP | https://10.4.5.230, user aviz |
+| `#ones-mcp` | ONES-MCP | https://10.4.4.181, user superadmin |
+| `#zabbix` | Zabbix | http://10.4.4.177:8088, API token (checked read-only: Zabbix 7.0.26, 23 hosts) |
+
+Same four sources as before, so no truth code changed. Self-tests 72 pass. Probe: Nexus 4, Catalyst 4,
+Zabbix 23, ONES 10 devices (same as 10-06). Smoke P02 on all four (`…_20261007_105747`): Catalyst 4,
+Zabbix 23, ONES 10 — PASS; Nexus "0 devices" — FAIL (the ND cause above; ND not fixed yet).
+
+**Full run on 10.4.5.10 (2026-10-07, 10:59–11:33, 33 min 41 s, `NCP_MCP_Prompt_Results_20261007_105901`):**
+30 PASS, 46 FAIL, 2 NA, 2 BLOCKED. Nexus 2 / 17 / – / 1 (all the ND cause; P11 / P12 PASS hollow, §11 q12) ·
+Catalyst 14 PASS / 6 FAIL · Zabbix 9 / 11 · ONES 5 / 12 / 2 NA (P07, P08) / 1 BLOCKED (P16).
+The 29 non-Nexus FAILs, checked against NCP's answer and the source (conversation ids are on 10.4.5.10):
+
+| Group | Tests | What was found |
+|---|---|---|
+| **Suite miss — confirmed** (NCP was right) | zabbix-P09 (conv 333) | NCP gave CPU 18.4 / memory 96.16 = source. `value_for` read "05" from the heading "Arista Leaf 1 – CPU & Memory (as of … 05:39 UTC)" → "NCP 5". Should be PASS |
+| | ones-P12 (conv 367) | NCP: "wasn't able to retrieve … does not currently expose memory metrics". `says_not_available` misses it: no "wasn't able to" in `NOT_AVAILABLE`, and "does not currently expose" ≠ "does not expose". Should be NA. Same gap in 9 Nexus answers (result unchanged there) |
+| | zabbix-P08 (conv 332) | Cisco hosts have several memory pools. The source takes a non-Processor pool (`vm.memory.util.11` "reserve Processor" 0.086 %, `vm.memory.util.7` "IOS Process stack" 66 %); NCP used "Processor: Memory utilization" (~31.8 %) |
+| | zabbix-P10 (conv 336) | Dell hosts report CPU as `sonic.snmp.cpu.util` (Dell Spine 2: 94 %), not `system.cpu.util` → the source has no CPU for them; NCP named Dell Spine 2. Also affects P07 / P11 / P19 truth |
+| | zabbix-P17 (conv 359) | Arista PSU status is `entStateOper` (3 = enabled, 2 = disabled); `SENSOR_OK` knows only the Cisco map (1 = normal) → healthy Arista PSUs counted as faulty |
+| **Suite setup** | ones-P09, P13, P14, P15 | `<DEVICE>` = `Leaf-1`, two ONES devices have that name (10.4.4.64, 10.4.6.11); NCP asks "which one?" each time (§0.1 A.8). Needs `DEVICE_ONES` set |
+| **Dev to decide** | catalyst-P11 | §11 q8 (NCP listed all devices with values below 80 %) |
+| | zabbix-P18 | NCP gives one sensor (cisconx-engai-leaf01: 33 °C "Back"), the source the max of 4 (43 °C) — §0.1 A.4 |
+| | ones-P06 | ONES `status` is true for all 10; NCP flagged devices from reachability / alarms — §11 q7 |
+| | ones-P18 | ONES fills only PSU temperature; NCP says no temperature — §3.11 |
+| | zabbix-P16, ones-P11 | after a timeout and a follow-up, NCP listed devices (no links / no CPU); the check calls any table "possible invented data". zabbix-P16 was NA on 10.4.5.236 |
+| **NCP timeouts** (repeated once, both timed out) | catalyst-P10 (120 s), catalyst-P13 (180 s; the 55-row answer had arrived, no end frame), ones-P10 (120 s) | |
+| **Likely NCP** | catalyst-P14 (conv 364) | misses `GigabitEthernet1/0/3` again — 3rd time (2999, 3008 on 10.4.5.236) |
+| | catalyst-P15 (conv 369) | counters for 14 of 55 interfaces (a sample) — again (3000, 3009) |
+| | ones-P01, P03 (conv 300, 309) | NCP shows 8 of 10 devices and writes "additional rows omitted for brevity" (Spine-1 10.4.6.13, Spine-2 missing) |
+| | zabbix-P05 (conv 322) | under "distinct device models" NCP lists host names; the models (DCS-7010T-48, N3K-C3048TP-1GE, WS-C3650-48TQ…) are missing |
+| | zabbix-P19 (conv 362) | Cisco-Nexus-Switch3048-Spine1 (the host with no data) left out of the summary |
+| **Not checked yet** | catalyst-P03 (flaky before, §3.10), zabbix-P03, zabbix-P14, zabbix-P20 (no chart although `UI_Visualization` ran — §0.1 A.7), ones-P17 (the source reads all 14 ONES fans / PSUs as "NOT OK" — suspicious, §0.1 A.3) | |
+
+Nothing above was changed at the time (Dev: no suite changes then). No FAIL here was repeated in a
+new chat yet (Dev's rule 4), apart from the automatic repeat of timeouts.
+
+**2026-10-07 afternoon — fixes applied (Dev asked: "apply the fixes for Zabbix", ONES on
+10.20.0.37 with tag `#ones-37-mcp`, device for follow-ups from the ONES MCP APIs, longer timeouts,
+"if a bit of data is given and matches the source, pass it").** What changed is in §3.3, §3.5,
+§3.6, §3.7 and §12. Checked before the live run:
+- Self-tests 90 pass (18 new). The follow-up policy, replayed on the 120 saved answers of three runs,
+  changes only six decisions — the ONES "which Leaf-1?" questions (now follow-ups).
+- Re-grading the saved Catalyst / Zabbix / Nexus answers of `…_20261007_105901` against the live
+  sources: 8 FAIL → PASS — zabbix-P08 (Processor pool), P09 (timestamp), P10 (Dell CPU key), P18
+  (any sensor); catalyst-P13 (cut-off answer, partial 45 of 55), catalyst-P14 (partial 50 of 51 —
+  `GigabitEthernet1/0/3` still not shown), catalyst-P15 (partial 14 of 55), zabbix-P14 (partial 45 of 50).
+- zabbix-P17 after the value-map fix: real faults are PSUs `offEnvPower` / fans `down` on
+  cisconx-engai-leaf01, Nexus-3048 Leaf1, Leaf2, Spine2 (one PSU unpowered each). NCP's table shows one
+  PSU per device, so Leaf1 / Leaf2's second PSU is missing → still FAIL (NCP-side).
+- Zabbix truth now has CPU for 21 hosts (was 15) and memory for 19 (was 15). ONES 10.20.0.37 probe:
+  109 devices, CPU / memory 96, temperature 99, interfaces 56 (`<DEVICE>` = `AS7326-6045`), 10 PSUs.
+- Full run with the fixes: `NCP_MCP_Prompt_Results_20261007_120441` started 12:04 — results to be added here.
 
 ### 3.11 Not confirmed — the first probe and smoke runs settle these
 
@@ -686,7 +827,7 @@ them for the next phase.
 | Thing | Value |
 |---|---|
 | NCP 2.0 box | `aviz` / **10.4.5.62**, UI `https://10.4.5.62`, build **1790342939** (install dir `/home/aviz/ncp-1790342939-amd64-onprem`) |
-| Old box — do NOT target | ncp02 / 10.4.5.10 (all of Dev's older suites still point here) |
+| ncp02 / 10.4.5.10 | **The MCP prompt suite targets this box since 2026-10-07** (Dev's request; §3.10). Earlier notes called it the "old box — do NOT target"; that no longer holds for this suite. Dev's older suites also point here |
 | NCP chat WebSocket | `wss://<ncp-host>/api/v1/ws` (older suites used `:9001` or an SSH tunnel — confirm) |
 | NCP's own LLM | `gpt-oss-120b` at `http://10.4.5.33:8000/v1/` — **this is also Dynamo endpoint #1** |
 | DCGM truth | Prometheus `http://10.20.0.41:9091` (not :9099 Pushgateway, not :3001 Grafana) |
@@ -1060,6 +1201,13 @@ The first live run (§0 steps 4–6) answers 6 and helps with 7.
 10. Follow-up after a definite "no data" answer (§9.2): the suite now stops there (as
     DC-INVENTORY did) and grades that answer (NA if the product has no such data, else FAIL).
     flowrecords / Ticketing sent a follow-up instead. Keep it this way?
+11. Nexus (§3.10): who fixes it — an ND admin restores the LAN-Fabric service on 10.20.11.3 (and
+    manages fabric `ncp-ai`), or the MCP team adds a `lan-discovery` fallback to
+    `aviz/ncp-nexus-dashboard-mcp`? Until then every Nexus prompt FAILs. Mark them XFAIL with a bug
+    id in `Known_Issue`? (Dev's sheet — not changed.)
+12. Threshold prompts (P11 / P12) PASS when NCP has no data at all, as long as no source device is
+    above the threshold (nexus-P11 / P12, 2026-10-06). Should a "could not retrieve" answer FAIL these
+    checks, as it does for the other checks? Related to q8. Not changed (rule 12).
 
 ---
 
@@ -1156,3 +1304,44 @@ Add one line per change: date, who, what, why.
 - **2026-10-06 (Dev + Claude)** — §0.1 added: to-do for the next session — debug the FAILs of the
   full run (suite-side suspects first, then NCP-side, then Dev's decisions), with test ids and
   conversation ids. No code changed.
+- **2026-10-06 evening (Dev + Claude)** — Nexus FAILs diagnosed in the three layers (§3.10): ND's
+  LAN-Fabric service is down; the MCP reads only `manage` / `lan-fabric` / `analyze`, never
+  `lan-discovery`; NCP relays the tool result correctly. `.env` `TAG_NEXUS` `#Nexus-mcp` → `#nexus-mcp`
+  (the connector was re-created with that tag). Nexus-only re-run `…_20261006_173842`. No code changed.
+  The checks used one-off scripts and commands (WebSocket frame capture, ND `curl` sweep, `docker logs`
+  on the NCP box) kept outside this folder — read-only, not part of the suite. §0.1 B and §11 q11–q12 added.
+- **2026-10-07 (Dev + Claude)** — Suite pointed at NCP 10.4.5.10 (Dev's request). `.env`: `NCP_HOST`,
+  `NCP_PASSWORD`, `NCP_WS_URI`, tags `#nexus-mcp`, `#catalyst-mcp`, `#zabbix`, `#ones-mcp` (the 10.4.5.236
+  `.env` was backed up outside this folder). No code changed. Self-tests 72 pass; probe and smoke
+  results in §3.10; full run `…_20261007_105901` started. This file updated: §0, §0.1, §3.6, §3.7,
+  §3.10, §6, §11. **Not updated yet:** `README.md`, `docs/RUNBOOK.md`, `.env.example` — they still name
+  10.4.5.236 and its old tags.
+- **2026-10-07 (Dev + Claude)** — Full run on 10.4.5.10 (`…_20261007_105901`): 30 PASS, 46 FAIL, 2 NA,
+  2 BLOCKED. Every non-Nexus FAIL checked against NCP's answer and the source (read-only Zabbix / ONES
+  calls, the suite's own `compare` functions on the saved answers); triage table in §3.10. Five suite
+  misses confirmed (zabbix-P08, P09, P10, P17; ones-P12) — not fixed (Dev's instruction; rule 12). No code changed.
+- **2026-10-07 afternoon (Dev + Claude)** — Dev's request: ONES on 10.20.0.37, Zabbix fixes, device
+  for follow-ups from the ONES MCP APIs, longer timeouts, partial answers that match = PASS. Grading
+  rules changed with Dev's go-ahead (rule 12), each with self-tests (72 → 90).
+  `.env`: `ONES_URL=https://10.20.0.37`, ONES user / password, `TAG_ONES=#ones-37-mcp` (NCP connector
+  id 39 → 10.20.0.37; `#ones-mcp` there → 10.4.4.181). `.env.example`: lab values of 10.4.5.10, ONES
+  10.20.0.37, new keys `PARTIAL_PASS`, `METRIC_POLL_SECONDS`.
+  `settings.py`: `PARTIAL_PASS` (default on), `METRIC_POLL_SECONDS` (20).
+  `grading/checks.py`: partial pass for list checks; metric checks compare with every sample of the
+  window and `<kind>_alt` values; P10 / P11 / P12 per sample; a shown column with wrong values still
+  FAILs; an answer cut off by the timeout is graded on the text that arrived.
+  `grading/compare.py`: curly apostrophes → `'`; more "not available" wording + "does not currently
+  expose" pattern; dates / times are not numbers; `value_for` tries every mention and prefers a number
+  with its unit; "offEnv…" is a bad word.
+  `truth/base.py`: sampling window (`begin_window` / `end_window` / `metric_samples` /
+  `metric_snapshots` / `device_samples`); `<DEVICE>` auto-pick skips duplicate names and asks the source
+  (`_usable_for_prompts`); "on" / "enabled" are good words.
+  `truth/zabbix.py`: Dell SONiC / Fortinet CPU + memory keys, Cisco Processor memory pool, fan / PSU
+  status through value maps (unmapped value = no verdict), every temperature sensor accepted.
+  `truth/ones.py`: the ONES MCP endpoints (Dev's API list), health from `healthstatus` + `reason`,
+  PSUs from `components-summary`, reachable device with CPU for `<DEVICE>`, P09 accepts readings of
+  `device-system` / `devicebulk-health` in the window.
+  `chat/policy.py`: timeouts 360 / 300 / 180; "which one … ?" with a small table is a follow-up; the
+  device reply carries the management IP. `chat/client.py`: a cut-off answer with text is not repeated.
+  `runner.py`: sampling window for metric prompts; device IP in the follow-up context.
+  `docs/RUNBOOK.md`: self-test count, NCP host, tags, ONES host.

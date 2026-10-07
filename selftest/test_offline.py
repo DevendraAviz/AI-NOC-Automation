@@ -31,10 +31,10 @@ pytestmark = pytest.mark.offline
 
 # ---------------------------------------------------------------- fake source
 class FakeSource(Source):
-    def __init__(self, links_unsupported=False, metrics_broken=False):
+    def __init__(self, links_unsupported=False, metrics_broken=False, no_mem=False):
         super().__init__(settings.Connector("fake", "Fake (Local MCP)", "#fake", "x:y", "http://x", "u", "p"))
-        self.EMPTY_MEANS_UNSUPPORTED = {"links"} if links_unsupported else set()
-        self.links_unsupported, self.metrics_broken = links_unsupported, metrics_broken
+        self.EMPTY_MEANS_UNSUPPORTED = ({"links"} if links_unsupported else set()) | ({"mem"} if no_mem else set())
+        self.links_unsupported, self.metrics_broken, self.no_mem = links_unsupported, metrics_broken, no_mem
 
     def _devices(self):
         return [Device("leaf-1", "10.0.0.1", "N9K-C93180YC-FX", "FDO111", "10.3(3)", healthy=True),
@@ -44,8 +44,12 @@ class FakeSource(Source):
     def _metrics(self):
         if self.metrics_broken:
             raise NoTruth("HTTP 404 on metrics")
-        return {"leaf-1": {"cpu": 12, "mem": 40, "temp": 35}, "leaf-2": {"cpu": 91, "mem": 80, "temp": 52},
+        data = {"leaf-1": {"cpu": 12, "mem": 40, "temp": 35}, "leaf-2": {"cpu": 91, "mem": 80, "temp": 52},
                 "spine-1": {"cpu": 45, "mem": 60, "temp": 41}}
+        if self.no_mem:
+            for v in data.values():
+                v["mem"] = None
+        return data
 
     def _interfaces(self, dev):
         return [Interface(dev.name, "Ethernet1/1", "up"), Interface(dev.name, "Ethernet1/2", "down"),
@@ -101,7 +105,7 @@ BAD = {
                         ["leaf-2", "10.0.0.2", "N9K-C93180YC-FX", "FDO222", "10.3(3)"],
                         ["spine-1", "10.0.0.3", "N9K-C9332C", "FDO333", "10.2(5)"]),
     "os_version_counts": T(["OS version", "Devices"], ["10.3(3)", 3]),
-    "models_list": "Model in use: N9K-C93180YC-FX.",
+    "models_list": "Model in use: N9K-C9500.",
     "unhealthy_devices": "All devices look healthy.",
     "cpu_all": T(["Device", "CPU %"], ["leaf-1", 13], ["leaf-2", 50], ["spine-1", 44]),
     "mem_all": "Memory data is not available for this connector.",
@@ -109,14 +113,28 @@ BAD = {
     "cpu_top": "leaf-1 has the highest CPU.",
     "cpu_above": T(["Device", "CPU"], ["leaf-2", "91%"], ["leaf-1", "12%"]),
     "mem_above": "No devices are above 75%.",
-    "interfaces_list": "leaf-1 interfaces: Ethernet1/1.",
+    "interfaces_list": "leaf-1 has no interfaces.",
     "interfaces_down": "No interfaces are down on leaf-1.",
-    "interface_counters": "Counters for Ethernet1/1: 100 bytes in.",
-    "links": T(["Local", "Remote"], ["leaf-1 Eth1/49", "spine-1 Eth1/1"]),
+    "interface_counters": "Interface counters are not available for leaf-1.",
+    "links": T(["Local", "Remote"], ["leaf-1 Eth1/49", "leaf-2 Eth1/1"]),
     "fan_psu": T(["Device", "Part", "Status"], ["leaf-1", "Fan1", "OK"], ["leaf-2", "PSU2", "OK"], ["spine-1", "Fan1", "OK"]),
     "temperature": T(["Device", "Temperature (°C)"], ["leaf-1", 36], ["leaf-2", 70], ["spine-1", 41]),
     "health_summary": T(["Device", "Health"], ["leaf-1", "Healthy"], ["leaf-2", "Healthy"], ["spine-1", "Healthy"]),
     "chart_os_version": "10.3(3): 2 devices, 10.2(5): 1 device.",
+}
+# Part of the data, all of it right: PASS ("partial: ...") with PARTIAL_PASS on (Dev 2026-10-07),
+# FAIL with it off (the old rule). Wrong / invented data FAILs either way (BAD above).
+PARTIAL = {
+    "devices_list": T(["Hostname", "IP"], ["leaf-1", "10.0.0.1"], ["leaf-2", "10.0.0.2"]),
+    "devices_fields": T(["Hostname", "Mgmt IP", "Version"], ["leaf-1", "10.0.0.1", "10.3(3)"],
+                        ["leaf-2", "10.0.0.2", "10.3(3)"]),                  # 2 of 3 devices, no model / serial
+    "models_list": "Model in use: N9K-C93180YC-FX.",
+    "cpu_all": T(["Device", "CPU %"], ["leaf-1", 13], ["leaf-2", 89.5]),
+    "interfaces_list": "leaf-1 interfaces: Ethernet1/1.",
+    "interface_counters": "Counters for Ethernet1/1: 100 bytes in.",
+    "links": T(["Local", "Remote"], ["leaf-1 Eth1/49", "spine-1 Eth1/1"]),
+    "fan_psu": T(["Device", "Part", "Status"], ["leaf-1", "Fan1", "OK"], ["leaf-2", "PSU2", "Failed"]),
+    "health_summary": T(["Device", "Health"], ["leaf-1", "Healthy"], ["leaf-2", "Down"]),
 }
 PARAM = {"cpu_above": 80, "mem_above": 75}
 
@@ -142,6 +160,92 @@ def test_good_answer_passes(check):
 def test_bad_answer_fails(check):
     v = run(check, BAD[check])
     assert v.status == "FAIL", (v.reason, v.expected)
+
+
+@pytest.mark.parametrize("check", sorted(PARTIAL))
+def test_partial_answer_passes_only_with_partial_pass(check, monkeypatch):
+    monkeypatch.setattr(settings, "PARTIAL_PASS", True)
+    v = run(check, PARTIAL[check])
+    assert v.status == "PASS" and v.reason.startswith("partial:"), (v.reason, v.expected)
+    monkeypatch.setattr(settings, "PARTIAL_PASS", False)
+    assert run(check, PARTIAL[check]).status == "FAIL"
+
+
+def test_partial_pass_never_hides_wrong_or_invented_data(monkeypatch):
+    monkeypatch.setattr(settings, "PARTIAL_PASS", True)
+    assert run("devices_list", T(["Hostname"], ["leaf-1"], ["ghost-9"])).status == "FAIL"           # invented
+    assert run("cpu_all", T(["Device", "CPU %"], ["leaf-1", 13], ["leaf-2", 50])).status == "FAIL"   # wrong value
+    fields = T(["Hostname", "Model"], ["leaf-1", "N9K-C93180YC-FX"], ["leaf-2", "Cisco Nexus 9300 Switch"])
+    assert run("devices_fields", fields).status == "FAIL"           # a model column with a wrong value
+
+
+def test_answer_cut_off_by_the_timeout_is_graded():
+    row = PromptRow("PX", "p", "devices_list")
+    v = evaluate(Ctx(row, FakeSource(), GOOD["devices_list"]), "timed out after 300s")
+    assert v.status == "PASS" and "graded the text that had arrived" in v.reason
+    assert evaluate(Ctx(row, FakeSource(), ""), "timed out after 300s").status == "FAIL"
+
+
+def test_single_device_values_skip_timestamps_and_prefer_percent():
+    # zabbix-P09 (conv 333): "05:39" in the heading was read as CPU 5 / memory 5
+    answer = ("**leaf-1 – CPU & Memory (as of 2026-10-07 05:39 UTC)**\n\n"
+              + T(["Category", "Metric", "Value"], ["**CPU**", "CPU utilization", "**12.4 %**"],
+                  ["**Memory**", "Total memory", "**4 080 189 440 B**"],
+                  ["**Memory**", "Memory utilization", "**40.2 %**"]))
+    v = run("cpu_mem_device", answer)
+    assert v.status == "PASS", v.reason
+
+
+def test_not_available_wording_with_curly_apostrophe_is_na():
+    # ones-P12 (conv 367)
+    answer = ("I wasn’t able to retrieve any memory‑utilization data from ONES‑MCP. The telemetry source "
+              "does not currently expose memory‑usage metrics.")
+    assert run("mem_all", answer, FakeSource(no_mem=True)).status == "NA"
+
+
+def test_metric_matches_any_sample_taken_while_ncp_answered():
+    class Moving(FakeSource):
+        def __init__(self):
+            super().__init__()
+            self.reads = 0
+
+        def _metrics(self):
+            self.reads += 1
+            cpu = 30 if self.reads == 1 else 70             # the value moved during the answer
+            return {"leaf-1": {"cpu": cpu, "mem": 40, "temp": 35, "temp_alt": [35, 48]},
+                    "leaf-2": {"cpu": 91, "mem": 80, "temp": 52}, "spine-1": {"cpu": 45, "mem": 60, "temp": 41}}
+    src = Moving()
+    src.begin_window(every=0.05)
+    time.sleep(0.2)
+    src.end_window()
+    assert run("cpu_all", T(["Device", "CPU %"], ["leaf-1", 31], ["leaf-2", 91], ["spine-1", 45]), src).status == "PASS"
+    assert run("cpu_all", T(["Device", "CPU %"], ["leaf-1", 50], ["leaf-2", 91], ["spine-1", 45]), src).status == "FAIL"
+    # every temperature sensor counts (zabbix-P18: NCP gave another sensor than the hottest)
+    assert run("temperature", T(["Device", "Temperature °C"], ["leaf-1", 48], ["leaf-2", 52], ["spine-1", 41]),
+               src).status == "PASS"
+
+
+def test_device_pick_skips_duplicate_names():
+    class Dupes(FakeSource):
+        def _devices(self):
+            return [Device("Leaf-1", "10.4.4.64"), Device("Leaf-1", "10.4.6.11"), Device("Leaf-2", "10.4.6.12")]
+    assert Dupes().device_for_prompts().name == "Leaf-2"
+
+
+def test_zabbix_part_status_and_memory_pool():
+    from ncp_suite.truth.zabbix import memory_value, part_ok
+    assert [part_ok(t) for t in ("up", "on", "normal", "enabled", "down", "offEnvPower", "notPresent", "disabled")] \
+        == [True, True, True, True, False, False, None, None]
+    pools = [{"key_": "vm.memory.util[vm.memory.util.11]", "name": "reserve Processor: Memory utilization",
+              "lastvalue": "0.086"},
+             {"key_": "vm.memory.util[vm.memory.util.7]", "name": "IOS Process stack: Memory utilization",
+              "lastvalue": "65.9"},
+             {"key_": "vm.memory.util[vm.memory.util.1]", "name": "Processor: Memory utilization", "lastvalue": "31.8"}]
+    assert memory_value(pools) == 31.8
+    assert memory_value([{"key_": "sonic.snmp.mem.util", "name": "Memory utilization", "lastvalue": "47.2"}]) == 47.2
+    # NCP's own words for a powered-off PSU count as "reported faulty" (zabbix-P17, conv 359)
+    from ncp_suite.grading.compare import has_bad_word
+    assert has_bad_word("| cisconx-engai-leaf01 | up (2) | offEnvPower (5) |")
 
 
 def test_not_available_while_source_has_data_says_so():
@@ -189,6 +293,18 @@ def test_followup_replies_start_with_the_tag():
     assert followup_reply("Which interface on Leaf-1 would you like?", ctx) == "#ONES-MCP All interfaces on Leaf-1."
     assert followup_reply("Which device would you like?", ctx) == "#ONES-MCP Device Leaf-1."
     assert followup_reply("Shall I go on?", ctx).startswith("#ONES-MCP Yes, please go ahead")
+
+
+def test_which_one_question_with_a_table_is_a_followup_answered_with_the_ip():
+    # ones-P13 (conv 370): two devices named Leaf-1, NCP asks which one, with a small table
+    q = ("I found two devices named **Leaf‑1** in the ONES inventory:\n\n"
+         + T(["Hostname", "Management IP"], ["Leaf-1", "10.4.4.64"], ["Leaf-1", "10.4.6.11"])
+         + "\n\nWhich one would you like the interface list for? Please specify the IP address.")
+    assert is_followup(q)
+    ctx = {"connector": "ONES", "tag": "#ones-37-mcp", "device": "Leaf-1", "device_ip": "10.4.4.64"}
+    assert followup_reply(q, ctx) == "#ones-37-mcp Device Leaf-1 (management IP 10.4.4.64)."
+    # a full answer that ends with an offer is still an answer
+    assert not is_followup(GOOD["cpu_all"] + "\n\nWould you like a chart of these values?")
 
 
 # ---------------------------------------------------------------- chat client vs a fake NCP
@@ -250,6 +366,15 @@ async def _fake_ncp(ws):
                     await ws.send(json.dumps({"type": "agent_tool_result", "ui_resources": [WIDGET]}))
                 await ws.send(json.dumps({"type": "agent_llm_stream", "chunk": "CPU table:\n\n![](ui://data-table-1)"}))
             elif msg["message"].startswith("#silent"):    # NCP never answers
+                continue
+            elif msg["message"].startswith("#trickle"):   # NCP is still writing when the timeout hits
+                try:
+                    for i in range(15):
+                        await ws.send(json.dumps({"type": "agent_llm_stream", "conversation_id": 42,
+                                                  "chunk": f"row {i}\n"}))
+                        await asyncio.sleep(0.3)
+                except websockets.exceptions.ConnectionClosed:
+                    pass
                 continue
             elif msg["message"].startswith("#fake") and "Device" not in msg["message"]:
                 for chunk in ("Which device ", "would you like me to check?"):
@@ -331,6 +456,11 @@ def test_an_answer_timeout_is_repeated_once_and_listed(fake_ncp):
     res = _chat(replace(fake_ncp, retries=3, answer_retries=1)).ask("#silent Show CPU.", {}, timeout=1)
     assert error_kind(res.error) == "answer" and len(res.retries) == 1, (res.error, res.retries)
     assert res.retries[0].startswith("attempt 1: timed out after 1s")
+
+
+def test_an_answer_cut_off_with_text_is_kept_not_repeated(fake_ncp):
+    res = _chat(replace(fake_ncp, retries=3, answer_retries=1)).ask("#trickle Show CPU.", {}, timeout=1)
+    assert res.error == "timed out after 1s" and "row 0" in res.text and not res.retries, (res.error, res.retries)
 
 
 def test_error_kinds():

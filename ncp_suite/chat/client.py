@@ -116,6 +116,8 @@ class NcpChat:
             kind = error_kind(result.error)
             if result.ok or kind is None or attempt == self.cfg.retries:
                 return result
+            if kind == "answer" and result.text.strip():
+                return result       # CHANGED 2026-10-07: cut off but text arrived -> graded as is, no repeat
             if kind == "answer":
                 if answer_repeats >= self.cfg.answer_retries:
                     return result
