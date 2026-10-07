@@ -102,6 +102,17 @@ METRIC_POLL_SECONDS = env_float("METRIC_POLL_SECONDS", 20)
 JUDGE_URL = env("JUDGE_URL")
 JUDGE_MODEL = env("JUDGE_MODEL", "gpt-oss-120b")
 
+# ---- Optional LLM reader (Dev, 2026-10-07) ----------------------------------
+# When the code reading of an answer FAILs, an LLM turns NCP's answer into a clean table and the same
+# code checks grade that table. The LLM never decides PASS / FAIL. Blank URL = off.
+# OpenAI-compatible base URL, e.g. a vLLM server's .../v1.
+EXTRACT_URL = env("EXTRACT_URL")
+EXTRACT_MODEL = env("EXTRACT_MODEL", "gpt-oss-120b")
+
+# ---- Repeat a FAIL once in a new chat (Dev's rule 4; Dev, 2026-10-07) ------------
+# FAIL then PASS -> PASS, reason starts "flaky:"; both attempts are listed. 0 = off.
+REPEAT_FAILS = env_int("REPEAT_FAILS", 1)
+
 
 # ---- Connectors -----------------------------------------------------------
 @dataclass(frozen=True)

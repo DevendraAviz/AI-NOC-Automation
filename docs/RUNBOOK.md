@@ -27,7 +27,7 @@ pip install -r requirements.txt
 
 | Step | Command | Expect |
 |---|---|---|
-| Self-tests (no network) | `pytest` | `90 passed` in ~15 s. If not, stop — setup problem |
+| Self-tests (no network) | `pytest` | `106 passed` in ~15 s. If not, stop — setup problem |
 | Check the sources | `pytest test_sources.py` | 4 passed in ~10 s; one summary line per connector |
 | Smoke test (one prompt) | `pytest test_main.py --connectors ones --prompts P02` | 1 result in ~20 s |
 | Full run (80 tests) | `pytest test_main.py` | ~40 min; 4 connectors run side by side |
@@ -65,7 +65,10 @@ Reports land in `reports/` (one set per run, never overwritten):
 Expected today: Nexus P18 and ONES P16 are BLOCKED (no temperature / no link endpoint). Nexus prompts FAIL
 until Nexus Dashboard's LAN-Fabric service is back (CLAUDE.md §3.10). A PASS whose reason starts with
 `partial:` means NCP showed only part of the data and all of it matched — the reason lists what was not
-shown (`PARTIAL_PASS=0` in `.env` makes those FAIL).
+shown (`PARTIAL_PASS=0` in `.env` makes those FAIL). A FAIL is repeated once in a new chat: "flaky: …" = failed
+first, passed on repeat (PASS); "failed twice" = FAIL. Each test also shows NCP's own tool calls ("NCP tool
+calls": e.g. "1 failed: manage_listFabrics → HTTP 500"). "read via the LLM
+reader" = an LLM copied NCP's answer into a table and the code graded that table (shown in the report).
 
 ## 6. If something goes wrong
 

@@ -37,6 +37,9 @@ class PromptResult:
     retries: list = field(default_factory=list)     # earlier attempts that failed (error, seconds, conversation)
     judge: str = ""
     scope: str = "admin"
+    trace_summary: str = ""                         # NCP's tool calls in one line (agent_trace)
+    trace: list = field(default_factory=list)       # the tool calls, masked, results shortened (chat/trace.py)
+    extracted: str = ""                             # the LLM reader's table, when it was used (grading/extract.py)
 
     def to_dict(self) -> dict:
         return asdict(self)
