@@ -50,11 +50,20 @@ INTERFACE_QUESTION = ("which interface", "which port", "specific interface", "in
 DEVICE_QUESTION = ("which device", "which hostname", "what device", "for which device", "specific device",
                    "device name", "which switch", "which one", "what is the ip")
 TIME_QUESTION = ("time range", "time window", "timeframe", "time frame", "how far back", "period")
+# CHANGED 2026-10-07: NCP asks "which one?" WITH a small table of candidates (ONES: two `Leaf-1`,
+# ones-P09 / P13 / P14 / P15 on 10.4.5.10). Such a question is a follow-up although it has a table.
+DISAMBIGUATION = ("which one would you like", "which one should", "which one do you",
+                  "please specify the ip", "please specify which", "specify the ip address",
+                  "which device would you like", "which device do you", "which device should")
 
 
 def is_followup(text: str) -> bool:
     t = (text or "").strip()
     lowered = t.lower()
+    small_table = sum(1 for ln in t.splitlines() if ln.lstrip().startswith("|")) <= 8
+    # "... Which one would you like? Please specify the IP address." — the "?" is near the end
+    if any(p in lowered.replace("’", "'") for p in DISAMBIGUATION) and small_table and "?" in lowered[-300:]:
+        return True                                         # "two devices named X ... which one?"
     if len(t) < 10 or t.count("|") > 6:                     # a table is an answer
         return False
     if "![" in t or "[image saved" in lowered:              # Ticketing: a chart / image is an answer
@@ -71,12 +80,17 @@ def followup_reply(question: str, ctx: dict) -> str:
     """The fixed reply to a follow-up question, starting with the connector #tag (CHANGED 11)."""
     q = question.lower()
     title, tag, device = ctx.get("connector", "this"), ctx.get("tag", ""), ctx.get("device", "")
-    if any(p in q for p in TOOL_QUESTION):
+    # the device's management IP (from the source, runner.py) tells same-named devices apart
+    ip = ctx.get("device_ip", "")
+    who = f"{device} (management IP {ip})" if device and ip else device
+    if any(p in q for p in DISAMBIGUATION) and device:
+        body = f"Device {who}."
+    elif any(p in q for p in TOOL_QUESTION):
         body = f"Use the {title} connector for this."
     elif any(p in q for p in INTERFACE_QUESTION):
-        body = f"All interfaces on {device}." if device else "All interfaces."
+        body = f"All interfaces on {who}." if device else "All interfaces."
     elif any(p in q for p in DEVICE_QUESTION):
-        body = f"Device {device}." if device else f"All devices in {title}."
+        body = f"Device {who}." if device else f"All devices in {title}."
     elif any(p in q for p in TIME_QUESTION):
         body = "Use the latest values."
     else:
@@ -85,10 +99,13 @@ def followup_reply(question: str, ctx: dict) -> str:
 
 
 def timeout_for(prompt: str) -> int:
-    """Seconds to wait for one answer when the prompt row has no Timeout (old: 180 / 120 / 60)."""
+    """Seconds to wait for one answer when the prompt row has no Timeout.
+    CHANGED 2026-10-07 (Dev: "even if 180 s is not enough, increase the timeout"): 360 / 300 / 180
+    (was 240 / 180 / 120; old suite 180 / 120 / 60). catalyst-P13 needed > 180 s for 55 rows, and
+    ONES 10.20.0.37 has 109 devices. An answer still cut off is graded on what arrived (checks.py)."""
     p = prompt.lower()
     if any(k in p for k in ("chart", "plot", "graph", "report", "summary", "health")):
-        return 240
+        return 360
     if any(k in p for k in ("list", "table", "all ", "interfaces", "counters", "each")):
-        return 180
-    return 120
+        return 300
+    return 180

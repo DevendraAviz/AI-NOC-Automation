@@ -14,13 +14,43 @@ from statistics import mean
 from ncp_suite.truth.base import (Component, Device, Interface, NoTruth, Source, Unsupported,
                         low, num, pick)
 
-ITEM_KEYS = ["system.cpu.util", "vm.memory.util", "vm.memory.size[pused]", "system.hw.model",
+# CHANGED 2026-10-07 (zabbix-P10, conv 336): Dell SONiC and Fortinet templates use their own
+# CPU / memory keys; without them 8 of 23 hosts had no CPU / memory in the truth.
+CPU_KEYS = ("system.cpu.util", "sonic.snmp.cpu.util", "fgate.cpu.util")
+MEM_KEYS = ("vm.memory.util", "vm.memory.size[pused]", "sonic.snmp.mem.util", "fgate.memory.util")
+ITEM_KEYS = [*CPU_KEYS, *MEM_KEYS, "system.hw.model",
              "system.hw.serialnumber", "system.sw.os", "sensor.temp.value", "sensor.fan.status",
              "sensor.psu.status", "net.if.status", "net.if.in["]
 IF_OPER = {"1": "up", "2": "down", "3": "testing", "4": "unknown", "5": "dormant",
            "6": "notPresent", "7": "lowerLayerDown"}
-# Cisco/Juniper env-mon value maps: 1 normal; 5 notPresent; the rest are problems
+# Only used when a fan / PSU item has no value map: Cisco env-mon 1 normal, 5 notPresent
 SENSOR_OK = {"1": True, "normal": True, "ok": True, "5": None, "notpresent": None}
+
+
+def part_ok(text: str) -> bool | None:
+    """Fan / PSU health from the item's value-map text (CHANGED 2026-10-07, zabbix-P17, conv 359:
+    raw codes differ per MIB — cefcFanTrayOperStatus 2 = up, cefcFRUPowerOperStatus 2 = on,
+    entStateOper 3 = enabled — and were all read as faulty). None = no verdict either way."""
+    t = low(text).replace(" ", "")
+    if t in ("", "notpresent", "disabled", "unknown", "offadmin"):
+        return None
+    if t.startswith(("off", "onbut")) or t in ("failed", "down", "critical", "shutdown", "warning", "notfunctioning"):
+        return False
+    return True if t in ("normal", "ok", "up", "on", "enabled", "true") else None
+
+
+def memory_value(items: list[dict]) -> float | None:
+    """Memory %: a plain key first; else Cisco's main pool ("Processor: Memory utilization"),
+    not "reserve Processor" or "IOS Process stack" (CHANGED 2026-10-07, zabbix-P08, conv 332)."""
+    def first(rows):
+        return next((v for it in rows if (v := num(it.get("lastvalue"))) is not None), None)
+    plain_keys = [it for it in items if it["key_"] in (*MEM_KEYS, "vm.memory.util[]")]
+    pools = [it for it in items if it["key_"].startswith("vm.memory.util[")]
+    main = [it for it in pools if re.match(r"\s*processor\b", it.get("name", ""), re.I)]
+    for group in (plain_keys, main, pools):
+        if (v := first(group)) is not None:
+            return v
+    return None
 
 
 def version_token(text: str) -> str:
@@ -72,7 +102,7 @@ class ZabbixSource(Source):
     def _items(self, keys=ITEM_KEYS, fresh: bool = False) -> dict[str, list[dict]]:
         def load():
             rows = self.rpc("item.get", {
-                "output": ["hostid", "name", "key_", "lastvalue", "units", "lastclock"],
+                "output": ["hostid", "name", "key_", "lastvalue", "units", "lastclock", "valuemapid"],
                 "hostids": [h["hostid"] for h in self._hosts()],
                 "search": {"key_": keys}, "searchByAny": True, "startSearch": True,
             })
@@ -131,8 +161,7 @@ class ZabbixSource(Source):
         return out
 
     def _metrics(self) -> dict[str, dict]:
-        items = self._items(["system.cpu.util", "vm.memory.util", "vm.memory.size[pused]", "sensor.temp.value"],
-                            fresh=True)
+        items = self._items([*CPU_KEYS, *MEM_KEYS, "sensor.temp.value"], fresh=True)
         out = {}
         for h in self._hosts():
             its = items.get(h["hostid"], [])
@@ -141,13 +170,16 @@ class ZabbixSource(Source):
                 return [v for it in its if it["key_"].startswith(prefixes)
                         and (v := num(it.get("lastvalue"))) is not None]
 
-            exact_cpu = [num(it["lastvalue"]) for it in its if it["key_"] in ("system.cpu.util", "system.cpu.util[]")]
-            cpu = exact_cpu[0] if exact_cpu and exact_cpu[0] is not None else (
+            exact_cpu = [v for it in its if it["key_"] in (*CPU_KEYS, "system.cpu.util[]")
+                         and (v := num(it.get("lastvalue"))) is not None]
+            cpu = exact_cpu[0] if exact_cpu else (
                 round(mean(values("system.cpu.util")), 2) if values("system.cpu.util") else None)
-            mem_vals = values("vm.memory.util", "vm.memory.size[pused]")
             temps = values("sensor.temp.value")
             out[str(h.get("name") or h.get("host"))] = {
-                "cpu": cpu, "mem": mem_vals[0] if mem_vals else None, "temp": max(temps) if temps else None}
+                "cpu": cpu, "mem": memory_value(its), "temp": max(temps) if temps else None,
+                # every sensor counts: NCP may report another sensor than the hottest one (zabbix-P18,
+                # conv 360: 33 °C "Back" vs max 43 °C) — Dev 2026-10-07: pass data that matches the source
+                "temp_alt": temps}
         return out
 
     def _interfaces(self, dev: Device) -> list[Interface]:
@@ -170,7 +202,19 @@ class ZabbixSource(Source):
     def _links(self):
         raise Unsupported("link")
 
+    def _value_maps(self) -> dict[str, dict[str, str]]:
+        """valuemapid -> {raw value: text}, e.g. CISCO-ENTITY-FRU-CONTROL-MIB 2 -> 'up'."""
+        def load():
+            rows = self.rpc("valuemap.get", {"output": ["valuemapid", "name"], "selectMappings": "extend"})
+            return {str(r["valuemapid"]): {str(m["value"]): str(m["newvalue"]) for m in r.get("mappings") or []}
+                    for r in rows or []}
+        return self._cached("valuemaps", load)
+
     def _components(self) -> list[Component]:
+        try:
+            maps = self._value_maps()
+        except NoTruth:
+            maps = {}
         out = []
         for h in self._hosts():
             for it in self._items().get(h["hostid"], []):
@@ -178,7 +222,14 @@ class ZabbixSource(Source):
                     "psu" if it["key_"].startswith("sensor.psu.status") else "")
                 if kind:
                     val = low(it.get("lastvalue"))
-                    ok = SENSOR_OK.get(val, False) if val else None
+                    mapping = maps.get(str(it.get("valuemapid") or "0"), {})
+                    text = mapping.get(str(it.get("lastvalue")), "")
+                    if text:
+                        ok, status = part_ok(text), f"{text} ({val})"
+                    elif mapping:               # mapped item, unmapped value (Arista "0" = no reading)
+                        ok, status = None, val
+                    else:                       # no value map: the old Cisco env-mon rule
+                        ok, status = (SENSOR_OK.get(val, False) if val else None), val
                     name = re.sub(r":\s*(Fan|Power supply|PSU) status.*$", "", it.get("name", ""), flags=re.I)
-                    out.append(Component(str(h.get("name") or h.get("host")), kind, name, val, ok))
+                    out.append(Component(str(h.get("name") or h.get("host")), kind, name, status, ok))
         return out

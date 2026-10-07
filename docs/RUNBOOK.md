@@ -7,11 +7,12 @@ Background and details: `CLAUDE.md` (start at §0).
 ## 1. Before you start
 
 - **Python 3.10 or newer** and `pip`.
-- **A machine on the lab network** that reaches NCP (`10.4.5.236`) and the four sources:
-  Nexus Dashboard `10.20.11.3`, Catalyst Center `10.4.5.230`, Zabbix `10.4.4.177:8088`, ONES `10.4.4.181`.
+- **A machine on the lab network** that reaches NCP (`10.4.5.10` since 2026-10-07) and the four sources:
+  Nexus Dashboard `10.20.11.3`, Catalyst Center `10.4.5.230`, Zabbix `10.4.4.177:8088`, ONES `10.20.0.37`.
 - **The `.env` file** in the project folder. Copy `.env.example` to `.env` and ask Dev for the values
   (NCP password, source logins). Never commit `.env` or paste it into a chat or ticket.
-- **The connector `#tags` exactly as in the NCP UI** (case-sensitive): `#Nexus-mcp`, `#mcp-cat`, `#zabbix`, `#ONES-MCP`.
+- **The connector `#tags` exactly as in the NCP UI**: on 10.4.5.10 `#nexus-mcp`, `#catalyst-mcp`, `#zabbix`, `#ones-37-mcp`
+  (the ONES tag must point at the same ONES as `ONES_URL`).
 
 ## 2. One-time setup
 
@@ -26,7 +27,7 @@ pip install -r requirements.txt
 
 | Step | Command | Expect |
 |---|---|---|
-| Self-tests (no network) | `pytest` | `72 passed` in ~6 s. If not, stop — setup problem |
+| Self-tests (no network) | `pytest` | `90 passed` in ~15 s. If not, stop — setup problem |
 | Check the sources | `pytest test_sources.py` | 4 passed in ~10 s; one summary line per connector |
 | Smoke test (one prompt) | `pytest test_main.py --connectors ones --prompts P02` | 1 result in ~20 s |
 | Full run (80 tests) | `pytest test_main.py` | ~40 min; 4 connectors run side by side |
@@ -61,7 +62,10 @@ Reports land in `reports/` (one set per run, never overwritten):
 | BLOCKED | the suite could not read the source — not an NCP result |
 | XFAIL | failed, but the prompt has a known bug id in the sheet |
 
-Expected today: Nexus P18 and ONES P16 are BLOCKED (no temperature / no link endpoint).
+Expected today: Nexus P18 and ONES P16 are BLOCKED (no temperature / no link endpoint). Nexus prompts FAIL
+until Nexus Dashboard's LAN-Fabric service is back (CLAUDE.md §3.10). A PASS whose reason starts with
+`partial:` means NCP showed only part of the data and all of it matched — the reason lists what was not
+shown (`PARTIAL_PASS=0` in `.env` makes those FAIL).
 
 ## 6. If something goes wrong
 

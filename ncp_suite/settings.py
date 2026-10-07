@@ -88,6 +88,15 @@ TOLERANCE = {
     "mem": env_float("MEM_TOL", 3),
     "temp": env_float("TEMP_TOL", 3),
 }
+# Dev, 2026-10-07: "if a bit of data is given and it matches the source, pass it". On: a list
+# answer that shows only part of the data PASSES when everything it shows is right (the reason
+# starts with "partial:" and names what was not shown). Wrong or invented data still FAILs.
+# Off (PARTIAL_PASS=0): the old rule — every source item must be shown.
+PARTIAL_PASS = env("PARTIAL_PASS", "1").lower() not in ("0", "false", "no", "off")
+# Metric prompts: the source is sampled when the prompt is sent, every this many seconds while
+# NCP answers, and after the answer. NCP's value passes if it matches any of those samples
+# (Dev's rule 2: pin the truth to the time NCP's tool read it).
+METRIC_POLL_SECONDS = env_float("METRIC_POLL_SECONDS", 20)
 
 # ---- Optional LLM judge (second-opinion note only) ------------------------
 JUDGE_URL = env("JUDGE_URL")
