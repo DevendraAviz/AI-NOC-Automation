@@ -11,7 +11,7 @@ import re
 from collections import defaultdict
 from statistics import mean
 
-from truth.base import (Component, Device, Interface, NoTruth, Source, Unsupported,
+from ncp_suite.truth.base import (Component, Device, Interface, NoTruth, Source, Unsupported,
                         low, num, pick)
 
 ITEM_KEYS = ["system.cpu.util", "vm.memory.util", "vm.memory.size[pused]", "system.hw.model",

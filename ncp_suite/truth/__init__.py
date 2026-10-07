@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import importlib
 
-from config import Connector
+from ncp_suite.settings import Connector
 
 
 def load_source(conn: Connector):
