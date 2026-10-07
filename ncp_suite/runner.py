@@ -73,7 +73,7 @@ def _attempt(row: PromptRow, conn: Connector, chat: NcpChat, src: Source, device
     finally:
         if windowed:
             src.end_window()
-    ctx = Ctx(row, src, answer.text, answer.has_image, device)
+    ctx = Ctx(row, src, answer.text, answer.has_image, device, answer.trace)
     verdict, extracted = evaluate(ctx, answer.error), ""
     if verdict.status == "FAIL" and extract_enabled(row.check) and answer.text.strip():
         # the code could not match it: let the LLM reader copy the data into a table, grade that table

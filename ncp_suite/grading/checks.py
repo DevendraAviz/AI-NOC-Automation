@@ -18,9 +18,10 @@ of data is given and matches the source truth, pass it"):
 """
 from __future__ import annotations
 
+import json
 import re
 from collections import Counter
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 from ncp_suite import settings
 from ncp_suite.grading.compare import (all_lines, clauses_about, contains, count_found, first_position,
@@ -28,7 +29,7 @@ from ncp_suite.grading.compare import (all_lines, clauses_about, contains, count
                                        mentions, name_column_extras, norm_if, numbers, parse_tables, plain,
                                        says_none, says_not_available, table_rows, row_text, value_for)
 from ncp_suite.prompts import PromptRow
-from ncp_suite.truth.base import Device, NoTruth, Source, Unsupported
+from ncp_suite.truth.base import Device, NoTruth, Source, Unsupported, num
 
 
 @dataclass
@@ -45,6 +46,7 @@ class Ctx:
     answer: str
     has_image: bool = False
     device: Device | None = None
+    trace: list = field(default_factory=list)      # NCP's agent_trace (tool calls with their arguments)
 
 
 WORDS = {"cpu": ("cpu",), "mem": ("memory", "mem", "ram"), "temp": ("temperature", "temp", "°c")}
@@ -515,8 +517,31 @@ def fan_psu(ctx: Ctx) -> Verdict:
 def chart_os_version(ctx: Ctx) -> Verdict:
     groups = _version_groups(ctx)
     exp = "bar chart of " + cap(f"{v}: {n}" for v, n in groups.most_common())
-    if not has_chart(ctx.answer, ctx.has_image):
+    # the plotted data, from NCP's own chart tool call in agent_trace (zabbix-P20 conv of run 160637:
+    # generate_column_chart {"data": [{"category": "9.3(14)", "value": 2}, …]}) — CHANGED 2026-10-07
+    plotted: dict[str, object] = {}
+    for t in ctx.trace:
+        if "chart" in str(t.get("tool_name") or "").lower():
+            try:
+                rows = json.loads(t.get("arguments") or "{}").get("data") or []
+            except (ValueError, AttributeError):
+                rows = []
+            plotted.update({str(r.get("category")): r.get("value") for r in rows if isinstance(r, dict)})
+    if not plotted and not has_chart(ctx.answer, ctx.has_image):
         return _fail(ctx, "no chart in the answer", exp)
+    if plotted:
+        problems, missing = [], []
+        for ver, n in groups.items():
+            got = next((v for c, v in plotted.items() if contains(c, ver)), None)
+            if got is None:
+                missing.append(f"{ver} ({n})")
+            elif num(got) != n:
+                problems.append(f"{ver}: chart {got} vs source {n}")
+        if problems or (missing and not (settings.PARTIAL_PASS and len(missing) < len(groups))):
+            return _fail(ctx, "chart data differs from the source: " + cap(problems + [f"{m} not plotted" for m in missing], 4), exp)
+        if missing:
+            return _partial(f"chart data matches for {len(groups) - len(missing)} of {len(groups)} versions", missing, exp)
+        return _ok(f"chart returned; plotted counts match the source ({len(groups)} versions)", exp)
     if any(contains(ctx.answer, v) for v in groups):
         problems = [t for miss, t in _check_groups(ctx, groups) if not (miss and settings.PARTIAL_PASS)]
         if problems:

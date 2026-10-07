@@ -27,7 +27,7 @@ pip install -r requirements.txt
 
 | Step | Command | Expect |
 |---|---|---|
-| Self-tests (no network) | `pytest` | `106 passed` in ~15 s. If not, stop — setup problem |
+| Self-tests (no network) | `pytest` | `107 passed` in ~15 s. If not, stop — setup problem |
 | Check the sources | `pytest test_sources.py` | 4 passed in ~10 s; one summary line per connector |
 | Smoke test (one prompt) | `pytest test_main.py --connectors ones --prompts P02` | 1 result in ~20 s |
 | Full run (80 tests) | `pytest test_main.py` | ~40 min; 4 connectors run side by side |

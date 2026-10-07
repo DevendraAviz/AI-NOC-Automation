@@ -358,6 +358,19 @@ def test_a_text_bar_chart_is_a_chart():
     assert run("chart_os_version", "```\n10.3(3)  ████ (3)\n10.2(5)  ██ (1)\n```").status == "FAIL"   # wrong count
 
 
+def test_chart_data_from_the_tool_call_is_checked():
+    # zabbix-P20 (run 160637): generate_column_chart's arguments hold the plotted data
+    def chart(*rows):
+        return [{"tool_name": "UI_Visualization", "arguments": "{}"},
+                {"tool_name": "generate_column_chart",
+                 "arguments": json.dumps({"data": [{"category": c, "value": v} for c, v in rows]})}]
+    row = PromptRow("P20", "p", "chart_os_version")
+    text = "Here is the chart."                                   # no ui:// tag in the text: the trace shows it
+    assert evaluate(Ctx(row, FakeSource(), text, trace=chart(("10.3(3)", 2), ("10.2(5)", 1)))).status == "PASS"
+    assert evaluate(Ctx(row, FakeSource(), text, trace=chart(("10.3(3)", 3), ("10.2(5)", 1)))).status == "FAIL"
+    assert evaluate(Ctx(row, FakeSource(), text)).status == "FAIL"                           # no chart at all
+
+
 def test_a_problem_count_column_flags_the_device():
     # zabbix-P19 (conv 704): "Active problems" column instead of a health word
     table = lambda n: T(["Host", "CPU", "Active problems*"], ["leaf-1", "12 %", 0], ["leaf-2", "91 %", n],

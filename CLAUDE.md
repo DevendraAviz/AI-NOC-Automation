@@ -43,7 +43,7 @@ NCP** (§3.10). Still open: §3.11 and §11. **Next session: start with §0.1 (t
 |---|---|---|
 | 1 | `python3 -m venv .venv` then `source .venv/bin/activate` (Windows: `.venv\Scripts\activate`) then `pip install -r requirements.txt` | packages installed (incl. `pytest-xdist`) |
 | 2 | Check `.env` is in the folder. If missing: copy `.env.example` to `.env` and ask Dev for the values. Fill `NCP_PASSWORD`; check `NCP_HOST`, `TAG_NEXUS`, `TAG_CATALYST`, `TAG_ZABBIX`, `TAG_ONES` | — |
-| 3 | `pytest` (no arguments = offline self-tests only, no network) | `106 passed` in ~15 s. If not, stop — it is a Python / package problem, not the lab |
+| 3 | `pytest` (no arguments = offline self-tests only, no network) | `107 passed` in ~15 s. If not, stop — it is a Python / package problem, not the lab |
 | 4 | `pytest test_sources.py` (reads the 4 systems directly, no NCP) | 4 passed in ~8 s; one summary line per connector at the end; files `reports/snapshots/<connector>.json` |
 | 5 | Open each snapshot. Every data kind shows `OK`, `UNSUPPORTED`, `NO_TRUTH` or `ERROR` (§4 says what to do) | devices `OK` for all 4 |
 | 6 | Smoke test, one prompt on one connector: `pytest test_main.py --connectors ones --prompts P02` | one result in ~20 s; NCP login and chat work |
@@ -103,7 +103,8 @@ rule 1 needs to tell "NCP relayed it wrong" from "the tool returned wrong data".
 6. **Interfaces P13 / P14** — Zabbix "missing 57 of 57", ONES "missing 56 of 56" and ONES "50+ down"
    (conv 3136, 3183, 3185): check interface-name matching (`compare.norm_if`, ONES alias) and how
    `is_down` reads ONES / Zabbix oper status.
-7. **zabbix-P20 / nexus-P20** — "no chart" although NCP called `UI_Visualization` (conv 3218, 3166):
+7. **Done 2026-10-07 (§3.5):** the chart check reads the chart tool call from agent_trace (chart id,
+   plotted data). Original item: **zabbix-P20 / nexus-P20** — "no chart" although NCP called `UI_Visualization` (conv 3218, 3166):
    check the saved message's `ui_resources`; confirm in the NCP UI whether a chart shows (§3.10).
 8. **ones-P15** — two devices named `Leaf-1` (conv 3221): set `DEVICE_ONES` to a unique host / IP
    or let the auto-pick skip duplicate names (Dev to choose). Still open on 10.4.5.10: the probe of
@@ -275,7 +276,7 @@ this file is unchanged; the code lives in the package `ncp_suite/`.
 | `ncp_suite/reporting/html.py` | the HTML report parts: result matrix (Dev's layout + counts) and the details block of each test |
 | `ncp_suite/pytest_plugin.py` | options `--connectors`, `--prompts`, `--excel`; pre-flight check; collects results from all workers; HTML columns; Excel at the end |
 | `data/mcp_prompts.xlsx` | the 20 prompts |
-| `selftest/test_offline.py` | 106 offline tests (72 before 2026-10-07; added: threshold context values, text bar chart, problem-count column, agent_trace kept + masked, repeat of a FAIL (flaky), LLM reader rescue + JSON→table, report trace / reader columns, devices listed under an "Unhealthy" heading, inventory window, health that changed during the answer, "Platform" is not a model column, "could you narrow the request?" follow-up, placeholder row, numbered-list values, missing column, platform fallback, source's own faulty status, read before the prompt, "give me the IP" follow-up, partial pass on / off, wrong data still fails under partial pass, cut-off answer graded, timestamps / units in P09, "wasn’t able to" wording, sampling window + temperature alternatives, unique device pick, "which one?" follow-up with the IP, cut-off answer not repeated, Zabbix value maps / memory pool / offEnvPower). Before that: every check with a good and a bad answer, NA/BLOCKED, fake NCP chat (follow-up with the tag first, table widget, `agent_complete` end, notification noise, another chat's frames, answer timeout repeated once), follow-up rules, runner, source view, source 401 re-login and nameless rows, settings, prompt sheet, Excel (incl. Failures sheet, control characters), HTML |
+| `selftest/test_offline.py` | 107 offline tests (72 before 2026-10-07; added: chart data from the tool call, threshold context values, text bar chart, problem-count column, agent_trace kept + masked, repeat of a FAIL (flaky), LLM reader rescue + JSON→table, report trace / reader columns, devices listed under an "Unhealthy" heading, inventory window, health that changed during the answer, "Platform" is not a model column, "could you narrow the request?" follow-up, placeholder row, numbered-list values, missing column, platform fallback, source's own faulty status, read before the prompt, "give me the IP" follow-up, partial pass on / off, wrong data still fails under partial pass, cut-off answer graded, timestamps / units in P09, "wasn’t able to" wording, sampling window + temperature alternatives, unique device pick, "which one?" follow-up with the IP, cut-off answer not repeated, Zabbix value maps / memory pool / offEnvPower). Before that: every check with a good and a bad answer, NA/BLOCKED, fake NCP chat (follow-up with the tag first, table widget, `agent_complete` end, notification noise, another chat's frames, answer timeout repeated once), follow-up rules, runner, source view, source 401 re-login and nameless rows, settings, prompt sheet, Excel (incl. Failures sheet, control characters), HTML |
 | `AI-NOC-Prompt-Validation-Use-Cases.xlsx` | plan for the next phase (10 AI NOC use cases, §7) — not built yet |
 | `reports/` | generated, git-ignored: snapshots, the run's `.html` + `.xlsx`, `images/` (charts NCP returned) |
 
@@ -389,7 +390,10 @@ answers with data. `NoTruth` (we could not read it) → BLOCKED.
 - **Threshold prompts (Dev, 2026-10-07, §11 q8):** a device counts as listed above the threshold only if
   NCP's own value for it is above it (or NCP gives no value); devices shown with a lower value as
   context are not a claim. **Charts:** a text bar chart (two or more lines of █-style bars) counts as
-  a chart; counts in the text are still checked. **Health:** a count above 0 in a "problems / alarms /
+  a chart; counts in the text are still checked. When NCP's chart tool was called, the **plotted data** is
+  checked: the arguments of the chart call in agent_trace (e.g. `generate_column_chart` →
+  `{"data": [{"category": "9.3(14)", "value": 2}, …]}`) are compared, version by version, with the
+  source counts; such a chart counts as returned even without a `ui://` tag in the text. **Health:** a count above 0 in a "problems / alarms /
   issues" column flags the device.
 - **Repeat of a FAIL (Dev, 2026-10-07; Dev's rule 4):** a FAIL is asked once more in a new chat
   (`REPEAT_FAILS=1`). FAIL then PASS → **PASS, reason "flaky: failed first (conversation X: …)"**;
@@ -1473,3 +1477,9 @@ Add one line per change: date, who, what, why.
   wrong number (Dev's rule 5). Self-tests 103 → 106 (the old P11 "bad" sample — a device shown at 12 % —
   encoded the old rule; replaced by a wrong claim, 85 % for a device at 12 %). Trace JSON files in
   `reports/traces/` dropped (Dev: not needed); the trace stays in the report.
+- **2026-10-07 evening (Dev + Claude)** — Chart data from agent_trace (Dev: "implement that as well,
+  minimal"). Run `…_160637`, zabbix-P20: `UI_Visualization` → `generate_column_chart` returned
+  `ui://column-chart-6c49d389`, and its arguments held the plotted data. `checks.Ctx` gets `trace`
+  (`runner.py` passes `answer.trace`); `chart_os_version` compares the plotted category → value with the
+  source counts (partial rule as elsewhere), and a chart tool call counts as a chart. On that real tool
+  data: PASS, "plotted counts match the source (7 versions)". Self-tests 106 → 107.
