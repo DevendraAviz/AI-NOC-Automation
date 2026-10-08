@@ -13,6 +13,7 @@ probe summary is printed at the end of the run.
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -34,7 +35,8 @@ def pytest_addoption(parser):
     group = parser.getgroup("ncp")
     group.addoption("--connectors", default="", help="comma list: nexus,catalyst,zabbix,ones (default: all)")
     group.addoption("--prompts", default="", help="comma list of prompt IDs, e.g. P01,P07 (default: all)")
-    group.addoption("--excel", default=str(settings.PROMPTS_XLSX), help="prompt sheet (default data/mcp_prompts.xlsx)")
+    group.addoption("--excel", default="", help="one prompt sheet for every selected connector "
+                                                "(default: each connector's own sheet, settings.REGISTRY)")
 
 
 def selected_connectors(config) -> list[settings.Connector]:
@@ -46,11 +48,26 @@ def selected_connectors(config) -> list[settings.Connector]:
 
 
 def selected_prompts(config) -> list[PromptRow]:
-    path = str(config.getoption("--excel"))
-    if path not in _SHEETS:
-        _SHEETS[path] = load_prompts(Path(path))
+    """Every prompt of the selected connectors' sheets, once per ID, in sheet order. A row with a blank
+    Applies_To applies to the connectors that read its sheet (the matrix shows "—" for the others).
+    CHANGED 2026-10-08: each connector reads its own sheet (network: mcp_prompts.xlsx; Prometheus and
+    DCGM: gpu_prompts.xlsx); --excel still sets one sheet for all."""
+    sheets: dict[str, set[str]] = {}
+    for conn in selected_connectors(config):
+        sheets.setdefault(str(config.getoption("--excel") or conn.prompts), set()).add(conn.key)
     want = {x.strip().upper() for x in config.getoption("--prompts").split(",") if x.strip()}
-    return [r for r in _SHEETS[path] if not want or r.id.upper() in want]
+    rows: dict[str, PromptRow] = {}
+    for path, keys in sheets.items():
+        if path not in _SHEETS:
+            _SHEETS[path] = load_prompts(Path(path))
+        for r in _SHEETS[path]:
+            if want and r.id.upper() not in want:
+                continue
+            if r.id in rows and rows[r.id].prompt != r.prompt:
+                raise pytest.UsageError(f"prompt ID {r.id} means two different prompts in two sheets ({path})")
+            applies = (r.applies_to or frozenset(keys)) | (rows[r.id].applies_to if r.id in rows else frozenset())
+            rows[r.id] = replace(r, applies_to=applies)
+    return list(rows.values())
 
 
 def is_worker(config) -> bool:
@@ -125,7 +142,8 @@ class NcpRun:
         meta["Chat socket"] = settings.CHAT.ws_uri
         if self.kind == "prompts":
             meta["Connector tags"] = ", ".join(f"{c.title} = {c.tag}" for c in selected_connectors(self.config))
-            meta["Prompt sheet"] = Path(self.config.getoption("--excel")).name
+            meta["Prompt sheets"] = ", ".join(sorted({Path(self.config.getoption("--excel") or c.prompts).name
+                                                      for c in selected_connectors(self.config)}))
             tol = settings.TOLERANCE
             meta["Tolerances"] = f"CPU ±{tol['cpu']:g}, memory ±{tol['mem']:g}, temperature ±{tol['temp']:g}"
             meta["Parallel workers"] = str(self.config.getoption("numprocesses", None) or "off")

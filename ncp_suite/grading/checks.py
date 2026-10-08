@@ -68,7 +68,9 @@ def _ok(reason: str, expected: str) -> Verdict:
 
 
 def _fail(ctx: Ctx, reason: str, expected: str) -> Verdict:
-    if says_not_available(ctx.answer):
+    # an answer with a data table did not say "not available" for the data — it said so for part of it
+    # (zabbix-P17 / P19 conv 902 / 917: "devices that do not collect these metrics" under a full table)
+    if says_not_available(ctx.answer) and not parse_tables(ctx.answer):
         reason = "NCP said the data is not available, but the source has it. " + reason
     return Verdict("FAIL", reason, expected)
 
@@ -504,12 +506,22 @@ def fan_psu(ctx: Ctx) -> Verdict:
         own = re.sub(r"\s*\(.*\)$", "", low(c.status)).strip()
         return any(has_bad_word(ln) or (own and re.search(rf"(?<![\w-]){re.escape(own)}(?![\w-])", low(ln)))
                    for ln in clauses_about(ctx.answer, [c.device]))
-    unflagged = sorted({c.device for c in bad if c.device not in not_covered and not reported(c)})
+    def named(c) -> bool:
+        """NCP names this very part ("PSU 2", "PowerSupply-2", "Fan Module-1") next to the device."""
+        m = re.search(r"(power ?supply|psu|fan)[\s\w]*?[-# ]?\s*([a-z]\b|\d+)", low(c.name))
+        kind = {"fan": r"fan(?: ?module| ?tray)?"}.get(m.group(1), r"(?:psu|power ?supply|ps)") if m else ""
+        return bool(m) and any(re.search(rf"{kind}\s*[-#]?\s*{m.group(2)}\b", low(ln))
+                               for ln in clauses_about(ctx.answer, [c.device]))
+    missed = [c for c in bad if c.device not in not_covered and not reported(c)]
+    # Vishakh, 2026-10-08 (zabbix-P17 conv 902): with PARTIAL_PASS a faulty part NCP does not show is "not shown";
+    # a part NCP names with a good status while the source has it faulty is still wrong
+    unflagged = sorted({c.device for c in missed if named(c) or not settings.PARTIAL_PASS})
     if unflagged:
         return _fail(ctx, f"faulty fan/PSU not reported on: {cap(unflagged)}", exp)
-    if not_covered:
-        return _partial(f"{len(devices) - len(not_covered)} of {len(devices)} devices covered, faulty parts on "
-                        "them reported", not_covered, exp)
+    hidden = [f"{c.device} {c.name}={c.status}" for c in missed]
+    if not_covered or hidden:
+        return _partial(f"{len(devices) - len(not_covered)} of {len(devices)} devices covered, every part shown "
+                        "matches the source", not_covered + hidden, exp)
     return _ok(f"{len(devices)} devices covered; {len(bad)} faulty part(s) reported", exp)
 
 

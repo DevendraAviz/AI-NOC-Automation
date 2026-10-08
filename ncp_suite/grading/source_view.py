@@ -23,9 +23,14 @@ METRIC_HEADER = {"cpu": "CPU %", "mem": "Memory %", "temp": "Temperature °C"}
 MAX_ROWS = 80
 
 
-def source_view(check: str, src: Source, device: Device | None = None) -> str:
+def source_view(check: str, src: Source, device: Device | None = None, param: float | None = None) -> str:
     kind = DATA_FOR_CHECK.get(check)
     try:
+        own = src.view(check, param) if hasattr(src, "view") else None     # a source with its own data (GPU)
+        if isinstance(own, str):
+            return own
+        if own:
+            return _table(*own)
         if kind == "devices":
             head = ["Device", "Mgmt IP", "Model", "Platform", "Serial", "Version", "Health"]
             rows = [[d.name, d.ip, d.model, d.platform, d.serial, d.os_version, _health(d)] for d in src.devices()]

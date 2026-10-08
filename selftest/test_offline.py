@@ -153,7 +153,8 @@ def run(check, answer, src=None, has_image=None):
 
 
 def test_every_check_has_a_good_and_bad_sample():
-    assert set(GOOD) == set(CHECKS) == set(BAD)
+    from ncp_suite.grading import gpu                       # GPU checks: samples in test_gpu_connectors.py
+    assert set(GOOD) == set(CHECKS) - set(gpu.CHECKS) == set(BAD)
 
 
 @pytest.mark.parametrize("check", sorted(GOOD))
@@ -175,6 +176,18 @@ def test_partial_answer_passes_only_with_partial_pass(check, monkeypatch):
     assert v.status == "PASS" and v.reason.startswith("partial:"), (v.reason, v.expected)
     monkeypatch.setattr(settings, "PARTIAL_PASS", False)
     assert run(check, PARTIAL[check]).status == "FAIL"
+
+
+def test_fan_psu_part_not_shown_is_partial_but_a_named_part_must_be_right(monkeypatch):
+    # zabbix-P17 (conv 902): one PSU status per device, the faulty second PSU not named -> partial (Vishakh 2026-10-08)
+    monkeypatch.setattr(settings, "PARTIAL_PASS", True)
+    shown = T(["Host", "Fan status", "PSU status"], ["leaf-1", "up (2)", "on (2)"], ["leaf-2", "up (2)", "on (2)"],
+              ["spine-1", "up (2)", "—"])
+    v = run("fan_psu", shown)
+    assert v.status == "PASS" and "leaf-2 PSU2=failed" in v.reason, v.reason
+    assert run("fan_psu", shown.replace("| leaf-2 | up (2) | on (2) |", "| leaf-2 | up (2) | PSU2 on (2) |")).status == "FAIL"
+    monkeypatch.setattr(settings, "PARTIAL_PASS", False)
+    assert run("fan_psu", shown).status == "FAIL"
 
 
 def test_partial_pass_never_hides_wrong_or_invented_data(monkeypatch):
@@ -813,7 +826,8 @@ def test_connectors_are_built_from_env_keys_by_name(monkeypatch):
     assert (conn.tag, conn.url, conn.source, conn.extra) == ("#demo", "https://demo",
                                                              "ncp_suite.truth.demo:DemoSource", {"site": "lab"})
     assert [c.title for c in settings.CONNECTORS.values()] == ["Nexus Dashboard (Local MCP)",
-                                                               "Catalyst Center (Local MCP)", "Zabbix", "ONES"]
+                                                               "Catalyst Center (Local MCP)", "Zabbix", "ONES",
+                                                               "Prometheus (Local MCP)", "DCGM"]
 
 
 def test_missing_names_blank_keys_never_values():
@@ -846,7 +860,7 @@ def _row(pid, conn, status, reason="", answer="…", **kw):
 
 def test_report_matrix_matches_devs_sheet(tmp_path):
     prompts = load_prompts(settings.PROMPTS_XLSX)[:2]
-    conns = list(settings.CONNECTORS.values())
+    conns = [c for c in settings.CONNECTORS.values() if c.prompts == settings.PROMPTS_XLSX]   # the network sheet
     results = [_row("P01", "ones", "PASS", "all 3 devices listed"),            # arrives first, sorted after
                _row("P01", "zabbix", "FAIL", "missing 1 of 3 devices: spine-1", tools=["host.get"],
                     answer="table \x1b[0m with a control character", retries=["attempt 1: timed out after 180s"])]
@@ -874,7 +888,7 @@ def test_result_survives_the_trip_between_workers():
 def test_html_matrix_has_devs_layout_counts_and_blanks():
     from ncp_suite.reporting.html import matrix_html
     prompts = load_prompts(settings.PROMPTS_XLSX)[:2]
-    conns = list(settings.CONNECTORS.values())
+    conns = [c for c in settings.CONNECTORS.values() if c.prompts == settings.PROMPTS_XLSX]   # the network sheet
     results = [_row("P01", "zabbix", "FAIL", "missing 1 of 3 devices: spine-1"), _row("P01", "ones", "PASS"),
                _row("P02", "nexus", "BLOCKED", "no ground truth"), _row("P02", "catalyst", "NA", "no such data")]
     page = matrix_html(results, prompts, conns, "x.xlsx")

@@ -270,7 +270,7 @@ class Source:
 
     def _check_values(self, kind: str, values: dict) -> dict:
         if not values:
-            label = {"cpu": "CPU", "mem": "memory", "temp": "temperature"}[kind]
+            label = {"cpu": "CPU", "mem": "memory", "temp": "temperature"}.get(kind, kind)
             if kind in self.EMPTY_MEANS_UNSUPPORTED:
                 raise Unsupported(label)
             raise NoTruth(f"{self.title}: no {label} values in the source payload")
@@ -428,7 +428,7 @@ class Source:
         if self._login_error:
             raise NoTruth(self._login_error)
         if not self._logged_in:
-            if not (self.conn.user and self.conn.password):
+            if self.conn.needs_login and not (self.conn.user and self.conn.password):
                 raise NoTruth(f"{self.title}: user/password not set in .env")
             self._logged_in = True
             try:

@@ -5,8 +5,9 @@ receives this folder — and their Claude — can start work without any other f
 history. Everything needed to run the current suite is here or in `README.md`.
 
 Owner: **Dev (Devendra Shekhawat)**, QA, Aviz Networks. Send results and questions to him.
-Created: 2026-09-29. Last updated: 2026-10-07 (suite on NCP 10.4.5.10; ONES source 10.20.0.37;
-partial pass, sampling window, longer timeouts, Zabbix / ONES truth fixes — §3.5, §3.10, §12).
+Created: 2026-09-29. Last updated: 2026-10-08 (two GPU-metric connectors added: Prometheus and DCGM —
+§3.14). Before: 2026-10-07 (suite on NCP 10.4.5.10; ONES source 10.20.0.37; partial pass, sampling window,
+longer timeouts, Zabbix / ONES truth fixes — §3.5, §3.10, §12).
 
 ---
 
@@ -16,6 +17,8 @@ partial pass, sampling window, longer timeouts, Zabbix / ONES truth fixes — §
 right answer straight from each connector's own system, compares the two by code, and fills
 an Excel matrix **and an HTML report** — the same layout as Dev's test sheet:
 `Prompt | Nexus Dashboard (Local MCP) | Catalyst Center (Local MCP) | Zabbix | ONES | Comments`.
+Since 2026-10-08 also two GPU-metric connectors, **Prometheus (Local MCP) and DCGM (API)**, with their own
+sheet `data/gpu_prompts.xlsx` (16 prompts, G01–G16) — matrix columns `Prometheus (Local MCP) | DCGM` (§3.14).
 
 **Status (2026-10-06).** Built and self-tested: 72 offline tests pass. **Live on NCP 10.4.5.236:**
 all four connectors probed and run (§3.10). Refactored the same day (§3.13): the code is now a
@@ -24,18 +27,24 @@ by side. A full 80-test run went from ~105 min (measured pace) to 40 min.
 **2026-10-07: the suite now targets NCP 10.4.5.10** (Dev's request; the four connectors were
 re-created there with new tags — §3.10). **Nexus: every FAIL has one cause, on Nexus Dashboard, not
 NCP** (§3.10). Still open: §3.11 and §11. **Next session: start with §0.1 (to do — debug the FAILs).**
+**2026-10-08: Prometheus and DCGM added** (§3.14; 112 tests, 190 self-tests). Latest complete run
+`NCP_MCP_Prompt_Results_20261008_141958` (ONES on 10.20.0.37): 78 PASS / 28 FAIL / 4 NA / 2 BLOCKED; two of the
+FAILs were suite misses, fixed and re-run PASS (→ 80 / 26). Three grading rules were changed by Vishakh that day
+(G08, alert charts, P17) — Dev to confirm (§11 q15). Work is on branch `feature/gpu-ai-connectors`, not merged yet.
 
 **What you need**
 - Python **3.10+** (built on 3.10.12; also run on 3.14.0) and `pip`.
 - A machine on the lab network that reaches NCP (`10.4.5.10` since 2026-10-07, before that
   `10.4.5.236` — set in `.env`) **and** the four
   systems: Nexus Dashboard `10.20.11.3` (https), Catalyst Center `10.4.5.230` (https),
-  Zabbix `10.4.4.177:8088` (http), ONES `10.20.0.37` (https; `10.4.4.181` before 2026-10-07).
+  Zabbix `10.4.4.177:8088` (http), ONES `10.20.0.37` (https; `10.4.4.181` before 2026-10-07), and since
+  2026-10-08 Prometheus `10.20.0.41:9091` (http; the Prometheus and DCGM connectors).
 - The NCP login password for user `superadmin` (`NCP_PASSWORD` — blank in `.env`; ask Dev).
 - The `#tag` of each connector as configured in NCP. On 10.4.5.10 (2026-10-07): `#nexus-mcp`,
   `#catalyst-mcp`, `#zabbix`, `#ones-37-mcp` (ONES 10.20.0.37; `#ones-mcp` there is ONES 10.4.4.181).
   Copy them exactly as the NCP UI shows them. The tag's connector and `ONES_URL` must point at the
-  same ONES — check `GET /api/v1/data_connectors` (host per tag).
+  same ONES — check `GET /api/v1/data_connectors` (host per tag). GPU connectors (2026-10-08):
+  `#prometheus-mcp`, `#dcgm`.
 
 **Steps — in this order**
 
@@ -43,19 +52,20 @@ NCP** (§3.10). Still open: §3.11 and §11. **Next session: start with §0.1 (t
 |---|---|---|
 | 1 | `python3 -m venv .venv` then `source .venv/bin/activate` (Windows: `.venv\Scripts\activate`) then `pip install -r requirements.txt` | packages installed (incl. `pytest-xdist`) |
 | 2 | Check `.env` is in the folder. If missing: copy `.env.example` to `.env` and ask Dev for the values. Fill `NCP_PASSWORD`; check `NCP_HOST`, `TAG_NEXUS`, `TAG_CATALYST`, `TAG_ZABBIX`, `TAG_ONES` | — |
-| 3 | `pytest` (no arguments = offline self-tests only, no network) | `107 passed` in ~15 s. If not, stop — it is a Python / package problem, not the lab |
-| 4 | `pytest test_sources.py` (reads the 4 systems directly, no NCP) | 4 passed in ~8 s; one summary line per connector at the end; files `reports/snapshots/<connector>.json` |
-| 5 | Open each snapshot. Every data kind shows `OK`, `UNSUPPORTED`, `NO_TRUTH` or `ERROR` (§4 says what to do) | devices `OK` for all 4 |
+| 3 | `pytest` (no arguments = offline self-tests only, no network) | `190 passed` in ~15 s. If not, stop — it is a Python / package problem, not the lab |
+| 4 | `pytest test_sources.py` (reads the 6 sources directly, no NCP) | 6 passed in ~10 s; one summary line per connector at the end; files `reports/snapshots/<connector>.json` |
+| 5 | Open each snapshot. Every data kind shows `OK`, `UNSUPPORTED`, `NO_TRUTH` or `ERROR` (§4 says what to do) | devices `OK` for all 6 |
 | 6 | Smoke test, one prompt on one connector: `pytest test_main.py --connectors ones --prompts P02` | one result in ~20 s; NCP login and chat work |
-| 7 | Full run: `pytest test_main.py` (80 tests = 20 prompts × 4 connectors, 4 connectors side by side; ~40 min, set by the slowest connector — ONES) | `reports/NCP_MCP_Prompt_Results_<time>.html` + `.xlsx` (same name). Open the HTML in a browser — it is rewritten after every test |
+| 7 | Full run: `pytest test_main.py` (112 tests = 20 network prompts × 4 connectors + 16 GPU prompts × 2 (Prometheus, DCGM); the 6 connectors side by side; ~40–60 min, set by the slowest connector — ONES) | `reports/NCP_MCP_Prompt_Results_<time>.html` + `.xlsx` (same name). Open the HTML in a browser — it is rewritten after every test |
 | 8 | Send Dev the files in §5 | — |
 
 A live run first checks `.env` and the NCP login, and stops in under a second if either is
 wrong (exit code 2, the message names the blank key — never its value).
 
 Useful variants: one connector `-k zabbix` or `--connectors zabbix,ones` · some prompts
-`--prompts P01,P07` · another prompt sheet `--excel path.xlsx` · one test at a time with live
-logs `-n 0` (use it to debug one prompt).
+`--prompts P01,P07` (GPU: `G06`) · the GPU connectors only `--connectors prometheus,dcgm` · one sheet for
+every selected connector `--excel path.xlsx` (default: each connector's own sheet) · one test at a time
+with live logs `-n 0` (use it to debug one prompt).
 
 ---
 
@@ -252,12 +262,12 @@ this file is unchanged; the code lives in the package `ncp_suite/`.
 |---|---|
 | `README.md` | short run instructions (same steps as §0) |
 | `docs/RUNBOOK.md` | one-page runbook for anyone running the suite: prerequisites, setup, run commands, options, results, troubleshooting |
-| `pytest.ini` | plain `pytest` = offline self-tests only; `-n 4 --dist loadgroup` (4 workers); markers `probe`, `offline`; html report |
+| `pytest.ini` | plain `pytest` = offline self-tests only; `-n 6 --dist loadgroup` (6 workers, one per connector; 4 before 2026-10-08); markers `probe`, `offline`; html report |
 | `conftest.py` | one test per prompt × connector (each tagged `xdist_group(<connector>)`); fixtures `chat` (logs in once per worker), `source_for`, `record_result`, `record_probe` |
 | `test_main.py` | the prompt test: `run_case()` → map PASS / FAIL / NA / BLOCKED / XFAIL to pytest |
 | `test_sources.py` | probe: reads each source directly, saves `reports/snapshots/<key>.json` |
 | `.env` / `.env.example` | settings with values (private) / the same keys without values |
-| `ncp_suite/settings.py` | the one place inputs are read: `.env` (real environment variables win); `ChatSettings`; tolerances; connector registry (one row per connector); `missing()` for the pre-flight check |
+| `ncp_suite/settings.py` | the one place inputs are read: `.env` (real environment variables win); `ChatSettings`; tolerances; connector registry (one row per connector: truth class, prompt sheet, login needed); `missing()` for the pre-flight check |
 | `ncp_suite/prompts.py` | loads the prompt sheet (`PromptRow`) |
 | `ncp_suite/chat/client.py` | NCP chat over WebSocket: login, connect, retries, follow-up loop (`NcpChat`, `ChatResult`) |
 | `ncp_suite/chat/stream.py` | frames → answer text (`AnswerStream`): end frame, activity rules, widgets, images, tool names |
@@ -265,7 +275,9 @@ this file is unchanged; the code lives in the package `ncp_suite/`.
 | `ncp_suite/chat/trace.py` | NCP's `agent_trace` (tool calls + raw results): masking of secrets, one-line summary ("N data calls · M failed: tool → HTTP 500"), shortened calls for the report (2026-10-07) |
 | `ncp_suite/truth/base.py` | shared data model (Device, Interface, Link, Component), `Unsupported` vs `NoTruth`, HTTP, caching, snapshot |
 | `ncp_suite/truth/nexus.py`, `catalyst.py`, `zabbix.py`, `ones.py` | one read-only client per source |
-| `ncp_suite/grading/checks.py` | 20 grading functions (one per Check name) + `evaluate()` |
+| `ncp_suite/truth/prometheus.py` | (2026-10-08) Prometheus and DCGM: PromQL on the Prometheus the DCGM exporters feed (`PrometheusSource`, `DcgmSource`) — §3.14 |
+| `ncp_suite/grading/checks.py` | 20 grading functions (one per Check name) + `evaluate()`; `CHECKS` also holds the GPU checks (added in `grading/__init__.py`) |
+| `ncp_suite/grading/gpu.py` | (2026-10-08) 15 checks for the 16 GPU-metric prompts — §3.14 |
 | `ncp_suite/grading/compare.py` | pure text helpers: tables, names, numbers, interface names, "not available" wording |
 | `ncp_suite/grading/judge.py` | optional LLM second-opinion note; never changes a result |
 | `ncp_suite/grading/extract.py` | optional LLM **reader**: on a FAIL, copies NCP's answer into a table (JSON rows per check) that the same code checks grade; never decides PASS / FAIL (2026-10-07) |
@@ -275,8 +287,11 @@ this file is unchanged; the code lives in the package `ncp_suite/`.
 | `ncp_suite/reporting/excel.py` | Excel: Summary (formulas) · Matrix (Dev's layout) · Details |
 | `ncp_suite/reporting/html.py` | the HTML report parts: result matrix (Dev's layout + counts) and the details block of each test |
 | `ncp_suite/pytest_plugin.py` | options `--connectors`, `--prompts`, `--excel`; pre-flight check; collects results from all workers; HTML columns; Excel at the end |
-| `data/mcp_prompts.xlsx` | the 20 prompts |
+| `data/mcp_prompts.xlsx` | the 20 network prompts (Nexus, Catalyst, Zabbix, ONES) |
+| `data/gpu_prompts.xlsx` | (2026-10-08) the 16 GPU-metric prompts G01–G16 (Prometheus and DCGM; Dev's GPU-metrics sheet) |
+| `data/dcgm_supported_metrics.csv` | (2026-10-08) the 25 metrics the DCGM connector supports (Vishakh) — DCGM's truth for G01 / G02 |
 | `selftest/test_offline.py` | 107 offline tests (72 before 2026-10-07; added: chart data from the tool call, threshold context values, text bar chart, problem-count column, agent_trace kept + masked, repeat of a FAIL (flaky), LLM reader rescue + JSON→table, report trace / reader columns, devices listed under an "Unhealthy" heading, inventory window, health that changed during the answer, "Platform" is not a model column, "could you narrow the request?" follow-up, placeholder row, numbered-list values, missing column, platform fallback, source's own faulty status, read before the prompt, "give me the IP" follow-up, partial pass on / off, wrong data still fails under partial pass, cut-off answer graded, timestamps / units in P09, "wasn’t able to" wording, sampling window + temperature alternatives, unique device pick, "which one?" follow-up with the IP, cut-off answer not repeated, Zabbix value maps / memory pool / offEnvPower). Before that: every check with a good and a bad answer, NA/BLOCKED, fake NCP chat (follow-up with the tag first, table widget, `agent_complete` end, notification noise, another chat's frames, answer timeout repeated once), follow-up rules, runner, source view, source 401 re-login and nameless rows, settings, prompt sheet, Excel (incl. Failures sheet, control characters), HTML |
+| `selftest/test_gpu_connectors.py` | (2026-10-08) 82 offline tests: every GPU check with an answer that must PASS (or NA) and one that must FAIL, on fake Prometheus / DCGM sources; chart tool call in agent_trace; DCGM supported list; source view; each connector's own sheet; "—" in the matrix |
 | `AI-NOC-Prompt-Validation-Use-Cases.xlsx` | plan for the next phase (10 AI NOC use cases, §7) — not built yet |
 | `reports/` | generated, git-ignored: snapshots, the run's `.html` + `.xlsx`, `images/` (charts NCP returned) |
 
@@ -428,6 +443,11 @@ answers with data. `NoTruth` (we could not read it) → BLOCKED.
 - "NCP said not available / none" when the source has data → always FAIL, said in the reason.
   The wording list (`NOT_AVAILABLE` in `compare.py`) also knows "wasn't able to", "unable to
   retrieve", "does not currently expose" and curly apostrophes (since 2026-10-07, ones-P12).
+- **Fan / PSU (P17; Vishakh, 2026-10-08):** with PARTIAL_PASS a faulty fan / PSU that NCP does not show is "not
+  shown" (partial PASS, listed in the reason); a part NCP names ("PSU 2", "PowerSupply-2", "Fan Module-1") with a
+  good status while the source has it faulty still FAILs. PARTIAL_PASS=0: every faulty part must be reported.
+- **"NCP said the data is not available" prefix** on a FAIL reason: only when the answer has no data table
+  (2026-10-08 — a full table with a side remark "devices that do not collect these metrics" is not a refusal).
 - **Health** uses each product's own signal: ONES `healthstatus` + `reason` from devices-health
   (since 2026-10-07; inventory `status` before) · Nexus operStatus / status ·
   Catalyst reachability + `overallHealth` ≤ 3 · Zabbix interface availability + active
@@ -446,6 +466,8 @@ answers with data. `NoTruth` (we could not read it) → BLOCKED.
 | Catalyst Center | `https://10.4.5.230` — `/dna/system/api/v1/auth/token` (basic auth) → `X-Auth-Token`; intent API `network-device`, `device-health`, `interface/network-device/{id}`, `topology/physical-topology`, `network-device/{id}/equipment?type=Fan` (and `PowerSupply`) | Temperature = `device-health` `avgTemperature` ÷ 100 (raw is hundredths of °C — inferred from the values, not documented) |
 | Zabbix | `http://10.4.4.177:8088/api_jsonrpc.php` JSON-RPC — `apiinfo.version` decides `username` vs `user` (≥ 5.4) and Bearer header vs `auth` field (≥ 6.4); `host.get`, `item.get` on template keys (`system.cpu.util`, `vm.memory.util`, `sensor.*`, `net.if.*`), `trigger.get` (min severity 3) | No links in Zabbix → Unsupported (NA if NCP says so). Empty temp / components / interfaces → Unsupported. NCP's Zabbix connector on 10.4.5.10 logs in with an API token; the suite still uses user / password (`truth/zabbix.py` has no token login) — same server, same data. Since 2026-10-07: CPU / memory also from `sonic.snmp.cpu.util` / `sonic.snmp.mem.util` (Dell SONiC) and `fgate.cpu.util` / `fgate.memory.util` (Fortinet); Cisco memory = the "Processor" pool; fan / PSU status read through the item's value map (`up` / `on` / `normal` / `ok` / `enabled` good; `down` / `off…` faulty; `notPresent` / `disabled` / unmapped = no verdict); temperature = the hottest sensor, every sensor accepted |
 
+| Prometheus (Local MCP) · DCGM (API) | `http://10.20.0.41:9091` Prometheus HTTP API: `/api/v1/query`, `/api/v1/label/__name__/values`, `/api/v1/alerts`; basic auth only if `PROMETHEUS_USER` / `PROMETHEUS_PASSWORD` are set (the API also answers without) | Both read the same Prometheus. GPU = DCGM `Hostname` label + `gpu` index. DCGM sees only `data/dcgm_supported_metrics.csv` (25) and has no alerts. 2026-10-08: 238 metric names, 28 `DCGM_FI_*`, 14 GPUs on 6 hosts, no throttling / ECC series, no alert rules. §3.14 |
+
 TLS: all sources and NCP use self-signed certificates; the suite does not verify them.
 
 ### 3.7 Settings (`.env`)
@@ -461,12 +483,14 @@ work on the lab today are in `.env.example`.
 | `NCP_USER` | superadmin | NCP login user |
 | `NCP_WS_URI` · `NCP_LOGIN_URL` | `wss://<NCP_HOST>/api/v1/ws` · `https://<NCP_HOST>/api/user/login` | older builds used `wss://<host>:9001/api/v1/ws`; 10.4.5.236 and 10.4.5.10 both use 443 (9001 refused) |
 | `NCP_PROJECT_ID` | blank | project chat — **not wired yet** (field name not confirmed); leave blank |
-| `TAG_NEXUS` · `TAG_CATALYST` · `TAG_ZABBIX` · `TAG_ONES` | required (prompt runs) | the `#tag` that routes a prompt to that connector — **check in NCP** (case-sensitive) |
+| `TAG_NEXUS` · `TAG_CATALYST` · `TAG_ZABBIX` · `TAG_ONES` · `TAG_PROMETHEUS` · `TAG_DCGM` | required (prompt runs) | the `#tag` that routes a prompt to that connector — **check in NCP** (case-sensitive) |
 | `<KEY>_URL` · `<KEY>_USER` · `<KEY>_PASSWORD` (KEY = NEXUS, CATALYST, ZABBIX, ONES) | required (prompt runs and probe) | each source system; Zabbix URL without `/index.php` |
+| `PROMETHEUS_URL` (+ optional `PROMETHEUS_USER` / `PROMETHEUS_PASSWORD`) · `DCGM_URL` | URL required | the Prometheus the GPU connectors read; basic auth only when set (registry: `needs_login=False`) |
 | `NEXUS_DOMAIN` | DefaultAuth | Nexus Dashboard login domain |
 | `ONES_LINKS_PATH` | blank | optional ONES link endpoint |
 | `DEVICE_NEXUS` … `DEVICE_ONES` | blank = auto | device (name or IP) for `<DEVICE>` prompts |
-| `CPU_TOL` · `MEM_TOL` · `TEMP_TOL` | 10 · 3 · 3 | compare tolerances (a row's `Tolerance` wins) |
+| `CPU_TOL` · `MEM_TOL` · `TEMP_TOL` | 10 · 3 · 3 | compare tolerances (a row's `Tolerance` wins); GPU memory % and temperature use MEM_TOL / TEMP_TOL |
+| `GPU_UTIL_TOL` · `POWER_TOL` | 10 · 10 | GPU utilization (points) · GPU power draw (% of the source value) |
 | `PARTIAL_PASS` | 1 | partial answers that match PASS ("partial: …"); 0 = every item must be shown (§3.5) |
 | `METRIC_POLL_SECONDS` | 20 | metric prompts: sample the source this often while NCP answers (§3.3) |
 | `WS_END_GRACE_SECONDS` | 3 | after the end frame, wait this long for late content |
@@ -848,6 +872,149 @@ Not done — ideas, ask Dev first:
   relayed it wrong" from "the tool got wrong data", §9 item 9). Today only the tool names are kept.
 - One WebSocket per conversation instead of a new one per follow-up (§9): wait for a live run
   that proves it.
+
+### 3.14 GPU-metric connectors: Prometheus and DCGM (added 2026-10-08)
+
+Asked by Vishakh (2026-10-08), on top of Dev's main (PR #3, `dc40655`): add the Prometheus (Local MCP) and
+DCGM (API) connectors with their prompts, scoped tightly, no refactoring. Decisions (Vishakh, 2026-10-08):
+use the existing plugin seams (no new layer — below); **one shared sheet** `data/gpu_prompts.xlsx` (Dev's
+`Prompt | Prometheus | DCGM` sheet, 16 prompts, word for word); only those 16 (the six DCGM rows of the
+other sheet are not added); yesterday's Dynamo / BCM work deleted (not in scope). The DCGM connector's
+supported metrics are in `data/dcgm_supported_metrics.csv` (25, from Vishakh).
+
+**NCP connectors (10.4.5.10, `GET /api/v1/data_connectors`, created 2026-10-07):** `#prometheus-mcp` →
+`http://10.20.0.41:9091/` (LocalMCP, user admin) · `#dcgm` → `prometheus_endpoint http://10.20.0.41:9091` (API).
+
+**How the two connectors plug in — the suite's existing seams, no extra layer** (Vishakh asked for a
+"plugin layer with lifecycle hooks, dependency injection and fallback stubs"; the suite already has each):
+
+| Plugin need | Where it is |
+|---|---|
+| registration | one row per connector in `settings.REGISTRY` (truth class, prompt sheet, login needed) |
+| connector code | `truth/prometheus.py`: `PrometheusSource` / `DcgmSource` subclass `Source` and fill its hooks (`login`, `_devices`, `_metrics`, `snapshot`, `view`) |
+| checks | `grading/gpu.py` `CHECKS`, added to the one table in `grading/__init__.py` |
+| lifecycle | pytest: `pytest_configure` / `sessionstart` (pre-flight) / `sessionfinish` (reports) in `pytest_plugin.py`; per test the runner's sampling window (`begin_window` / `end_window` / `clear_window`) |
+| dependency injection | fixtures: `chat` (one login per worker) and `source_for` (one source per connector) are passed into `run_case` |
+| fallback stubs | the offline fakes in `selftest/test_gpu_connectors.py` (`FakeProm`, `FakeDcgm` — no network) |
+
+**Changes to existing files (all small):** `settings.py` (two registry columns: prompt sheet, login needed;
+two rows; `GPU_UTIL_TOL`, `POWER_TOL`; sheet / list paths) · `truth/base.py` (login only when the connector
+needs one; a label for any metric kind) · `pytest_plugin.selected_prompts` (each connector reads its own
+sheet; a blank Applies_To = the connectors of that sheet; one row per prompt ID) · `grading/source_view.py`
+(a source may show its own table: `view()`) · `runner.py` (passes `row.param` to the source view) ·
+`reporting/excel.py` ("—" for a prompt that is not in a connector's sheet, as the HTML already did) ·
+`pytest.ini` (`-n 6`) · `selftest/test_offline.py` (4 tests: 6 connectors; network checks / network matrix).
+Network grading unchanged (rule 12).
+
+**Prompts and checks** (`grading/gpu.py`; grading notes from Dev's CSV "Data-Connectors-GPU-Metrics (updated)"):
+
+| ID | Prompt | Check | Passes when |
+|---|---|---|---|
+| G01 | List all the metrics. | metric_catalog | every name shown exists in Prometheus (none invented); Prometheus: all names, DCGM: its supported list; partial pass; stated count not graded |
+| G02 | List all the GPU metrics. | gpu_metric_names | same; Prometheus: every `DCGM_FI_*`, DCGM: its supported list |
+| G03 / G04 | Plot GPU utilization for past 1 hour / 24 hours. | gpu_util_chart (Param = hours) | a chart (image, widget, text bars, or a chart tool call in agent_trace); utilization numbers in the text within ±GPU_UTIL_TOL of the avg / max of that GPU or host |
+| G05 | Show power and temperature utilization for past 24 hours. | power_temp_window | a chart, or numbers per GPU / host: temperature ±TEMP_TOL, power ±POWER_TOL % of the avg / max |
+| G06 | Show current GPU temperature and power draw. | gpu_temp_power | each GPU vs every read during the answer |
+| G07 | Show GPU memory utilization for each GPU. | gpu_mem_util | FB used / (used + free + reserved) ±MEM_TOL; MEM_COPY_UTIL only if the answer says "copy" / "bandwidth" |
+| G08 | Show current GPU throttling status. | throttling | no throttling series (Vishakh, 2026-10-08): NCP's per-GPU temperature / utilization / power vs the source read **at the time of NCP's data call** (agent_trace: the inner tool calls and the start / end of `query_<connector>`); SM clock shown with them in the report. No per-GPU values: NA on "not available", else FAIL |
+| G09 | Show GPU ECC error counters. | ecc | no ECC series → same rule |
+| G10 | Which GPUs are the hottest right now? | gpu_hottest | first GPU named (host + index) is the hottest, ties ±TEMP_TOL |
+| G11 | Rank GPUs by utilization. | gpu_rank_util | NCP's order high → low; within ±GPU_UTIL_TOL may swap |
+| G12 | Which GPUs are idle or underutilized? | gpu_idle (Param 5) | every GPU ≤5 % listed, none >30 % listed; a GPU shown with a high value / busy word is context, not a claim |
+| G13 | Show currently firing alerts grouped by severity. | alerts_by_severity | Prometheus: alerts by severity, "none firing" when none. DCGM (no alert data): NA on "not available"; zero alerts in every severity = PASS (Vishakh, 2026-10-08); an alert listed = FAIL |
+| G14 | Give me an overall GPU fleet health summary. | gpu_fleet_health (Param 85) | hosts covered (or GPU total right); every GPU with XID > 0, row-remap failure, uncorrectable rows or temperature > 85 °C at every read flagged |
+| G15 | Show average GPU utilization for the previous week. | gpu_util_avg (Param 168, Tolerance 5) | per GPU, per host or fleet mean within ±5 of avg_over_time |
+| G16 | Pie chart of active alerts by severity. | alerts_chart | no alerts → NCP says so (a chart with every severity 0 is fine — Vishakh, 2026-10-08); DCGM as G13 |
+
+How a GPU value is read: a table row naming the host (+ the GPU index when the host has several GPUs);
+the column named after the metric — or an unlabelled "Value" column whose table title names it (if the
+title names two metrics, the value counts only when it fits, else "not shown"); else a sentence clause
+that names exactly that GPU ("Lowest power draw: 28 W (hgx-su00-v100, GPU 2)"). Plain-text numbers need
+their unit. The LLM reader (`grading/extract.py`) has no columns for the GPU checks (off for them).
+
+Time windows (G03–G05, G15; refined after the 2026-10-08 GPU run): the source gives, per GPU, the avg / max /
+min over every sample **and** over a 50-point series — what NCP's tools read (`show_prometheus_chart`: 51
+points per 24 h). A number is compared with the statistic its column / words name ("Avg W", "peak", "min");
+a min / max may also lie between the true extreme and the average (a sampled series misses the extremes);
+first / last / unnamed numbers must lie inside the window's min – max. In a sentence the number must fit one
+of the GPUs / hosts the sentence names ("X and Y … ~99 W and ~286 W respectively": 286 fits neither → FAIL).
+A chart tool call counts as a chart only when its result shows a rendered chart (not "nothing to chart").
+Throttling: since 2026-10-08 (Vishakh) the per-GPU values are graded against the reads at NCP's tool-call time
+(the earlier "a guessed status = FAIL" rule from Dev's note applies only when NCP gives no per-GPU values). Fleet health: a hot GPU counts as flagged when a sentence with an attention word ("worth
+monitoring", "hot") states its temperature and the value fits no other GPU.
+
+**Evidence from 2026-10-07 (old code, same checks):** prometheus-G06 (conv 469) — NCP's table held only
+temperatures and its text called them power ("lowest power draw 28 W" for hgx-su00-v100 GPU 2; source
+39.3 W) → FAIL on the wrong power value. dcgm-G06, dcgm-G01 / G02, prometheus-G13 PASS; dcgm-G13 NA.
+
+**GPU run (2026-10-08 09:57, `NCP_MCP_Prompt_Results_20261008_095746`, 32 tests, 24 min, code at the start
+of the day):** 19 PASS (2 flaky, 3 partial), 9 FAIL, 4 NA. Each FAIL read against NCP's answer and its tool
+calls (agent_trace):
+
+| Test (conv) | Verdict | What was found |
+|---|---|---|
+| prometheus-G05 (781, 783) | **NCP** | text: "a6000-2/gpu0 and a100/gpu0 … ~99 W and ~286 W respectively"; NCP's own `show_prometheus_chart` stats: a6000-2 max 29.5 W, a100 max 99.2 W, 286 W = hgx-su00-a6000 GPU 3 — NCP relayed its tool data wrongly. (The suite's first reason also charged an unrelated "40 W" — fixed.) |
+| dcgm-G05 (782, 784) | **NCP connector** | `get_gpu_trends(hours=24)` returned `window_hours 24, step_s 30, n 30` per GPU — 30 samples 30 s apart = the last ~15 minutes, shown by NCP as a "24-hour summary" (a6000 GPU 1 avg 157 W vs 24-h avg 134 W). (Suite fix: min / first / last columns were compared with avg / max.) |
+| dcgm-G15 (814, 815) | **NCP** | "the DCGM connector only provides live telemetry snapshots … cannot compute a true average over the past week" — gave current values (100 %) instead; the same connector answered 24-h prompts (G03–G05) |
+| prometheus-G09 (790, 791) | **NCP / Dev** | a table of row-remap metrics titled "GPU ECC Error Counters" and "ECC error counters are all zero … no ECC errors" — no ECC series exists (Dev's note: NA only on "not available"; remapped rows labelled as such are allowed — here they were presented as ECC) |
+| dcgm-G08 (793, 797) | **NCP** | throttle field "isn't included in this snapshot", but "a classic sign of thermal throttling … strongly suggests active throttling" (hgx-su00-a6000 GPU 1, 92 °C, SM clock 615 MHz) — a guessed status (Dev's note). Reason text fixed |
+| prometheus-G14 (800, 802) | **NCP** | fleet averages only; "temperatures are comfortably within typical operating ranges" while hgx-su00-a6000 GPU 1 is at 92 °C (> 85). (Suite fix: "> 200 W per GPU" had been read as "200 GPUs".) |
+| dcgm-G10 (803, 804) | suite — fixed | NCP right: a table `Host | GPU # | …` → hgx-su00-a6000, 1, 92 °C; the GPU column was not read |
+| dcgm-G14 (812, 813) | suite — fixed | NCP flagged "a single RTX A6000 reaching 93 °C – worth monitoring" (no host named) |
+| prometheus-G16 (808, 810) | suite — fixed | NCP right: "no active alerts, so a pie chart … can't be generated"; the chart tool had returned "nothing to chart" but was counted as a chart |
+
+Also seen: prometheus-G02 partial (NCP named 3 of 28 DCGM metrics); prometheus-G10 / G11 / G15 flaky (passed
+on the repeat). Re-graded on the saved answers with the fixed code: dcgm-G10, dcgm-G14, prometheus-G16 PASS;
+the six NCP FAILs stay FAIL with the reasons above.
+
+**Latest complete run (2026-10-08 14:19–15:28, 1 h 9 min, `NCP_MCP_Prompt_Results_20261008_141958`, all 112 tests,
+ONES on 10.20.0.37 / `#ones-37-mcp`, with every rule change of the day):** 78 PASS (16 partial, 5 flaky), 28 FAIL,
+4 NA, 2 BLOCKED; no NCP connection error. Two FAILs were suite misses — fixed and re-run PASS (`…_152909`
+prometheus-G08, `…_153134` prometheus-G16), so 80 PASS / 26 FAIL in effect.
+
+| Connector | PASS | FAIL | NA | BLOCKED |
+|---|---|---|---|---|
+| Nexus Dashboard | 4 | 15 (the ND cause, §3.10) | – | 1 (P18) |
+| Catalyst Center | 20 | – | – | – |
+| Zabbix | 18 (P17 partial) | 2 (P16 device list after "no links"; P19 open problems not flagged — Dev keeps FAIL) | – | – |
+| ONES (10.20.0.37) | 14 | 5 (P07, P10 timed out; P08 "I was unable to generate a response"; P13 / P14 NCP's ONES tools failed — "store_in_memory: unexpected keyword argument" — and it listed port counts of all 109 devices) | – | 1 (P16, no link endpoint) |
+| Prometheus | 11 (+ G08, G16 on re-run) | 3 left: G09 (ECC "all zero" from row-remap metrics), G14 (GPU at ~92 °C not flagged), G15 (mean of 5-minute peaks called the average: rtxpro6000 host 29 % vs ~2.5 %) | – | – |
+| DCGM | 11 | 1: G15 ("cannot compute a weekly average") | 4 (G08, G09, G13, G16) | – |
+
+NCP 10.4.5.10 was down from ~12:28 to ~14:15 that day (connection refused; came back with new connectors
+devrev, dynamo-mcp, ones-209-mcp); the 12:19 run was stopped and discarded.
+
+**Earlier complete run (superseded; 2026-10-08 10:25–11:14, 49 min 44 s, `NCP_MCP_Prompt_Results_20261008_102507`,
+ONES on 10.4.4.181, before the rule changes of the afternoon):** 73 PASS (10 partial, 4 flaky), 28 FAIL, 9 NA,
+2 BLOCKED.
+
+| Connector | PASS | FAIL | NA | BLOCKED |
+|---|---|---|---|---|
+| Nexus Dashboard | 3 | 16 | – | 1 (P18) |
+| Catalyst Center | 20 | – | – | – |
+| Zabbix | 17 | 3 (P16, P17, P19) | – | – |
+| ONES (Vishakh's `.env`: `#ones-mcp` → 10.4.4.181) | 11 | 2 (P15, P17) | 6 (P07–P12: no CPU / memory on 10.4.4.181) | 1 (P16) |
+| Prometheus | 12 | 3 (G09, G14, G15) | 1 (G08) | – |
+| DCGM | 10 | 4 (G04, G08, G15, G16) | 2 (G09, G13) | – |
+
+Network FAILs are the known ones (§3.10: the ND cause for Nexus; zabbix-P16 / P17 / P19, ones-P15 / P17) — network
+grading was not touched. GPU FAILs, each read against NCP's answer and agent_trace:
+- **prometheus-G09** (876, 880) — "ECC error counters are all zero" from row-remap metrics; no ECC series (Dev to confirm the rule, §11 q14).
+- **prometheus-G14** (895, 901) — fleet averages only, "temperatures are well within safe operating limits";
+  hgx-su00-a6000 GPU 1 at ~92 °C (> 85) not flagged (also this morning).
+- **prometheus-G15** (910, 912) — NCP's `plot_domain_kpi` charted `max by (ip) (max_over_time(DCGM_FI_DEV_GPU_UTIL[5m]))`
+  and called the mean of those 5-minute peaks the "average": 10.4.5.33 (hgx-su00-a6000) "≈ 78 %" vs 7-day avg ~35 %,
+  10.20.11.73 "≈ 29 %" vs ~2–3 % (the pattern Dev's sheet warned about). The reason in this run is the old vague one
+  ("no … average matching"); hosts are now also read by their `ip` label, so the next run names them.
+- **dcgm-G04** — NCP timed out (360 s, twice).
+- **dcgm-G08** (927, 932) — throttle field missing, status guessed from temperature / clocks (as this morning).
+- **dcgm-G15** (956, 958) — "cannot compute a weekly average" (DCGM connector: live snapshots only — its
+  `get_gpu_trends` reads ~15 minutes, see dcgm-G05 above).
+- **dcgm-G16** (960, 962) — a pie chart of "DCGM alerts" with Critical / Warning / Info all 0; DCGM has no alert data
+  (Dev's note: say "not available", draw no made-up chart).
+
+Live checks of today's fixes: dcgm-G10 (GPU column), prometheus-G16 (empty chart call), prometheus-G05 (sentence
+numbers) PASS; dcgm-G05, dcgm-G14 flaky (passed on the repeat).
 
 ---
 
@@ -1284,6 +1451,14 @@ The first live run (§0 steps 4–6) answers 6 and helps with 7.
 12. Threshold prompts (P11 / P12) PASS when NCP has no data at all, as long as no source device is
     above the threshold (nexus-P11 / P12, 2026-10-06). Should a "could not retrieve" answer FAIL these
     checks, as it does for the other checks? Related to q8. Not changed (rule 12).
+13. GPU (§3.14): `pytest.ini` runs `-n 6` now (one worker per connector, up to 6 chats at once on 10.4.5.10).
+    Fine (see q9)? And G01 / G02 do not grade the metric count NCP states — should they?
+14. GPU G09 (ECC): NCP shows the row-remap metrics as "ECC error counters … all zero". Your note allows remapped
+    rows "if labelled as such" — the metric names are shown, but the claim is about ECC. FAIL (as coded) or NA?
+15. Vishakh changed three rules on 2026-10-08: G08 (no throttling series) grades NCP's per-GPU temp / util / power at
+    its tool-call time instead of failing a guessed status; DCGM G13 / G16 and an all-zero alert chart PASS instead of
+    "must say not available / draw no chart"; P17 (fan / PSU) — a faulty part NCP does not show is "not shown"
+    (partial PASS), not a FAIL. Agree?
 
 ---
 
@@ -1483,3 +1658,51 @@ Add one line per change: date, who, what, why.
   (`runner.py` passes `answer.trace`); `chart_os_version` compares the plotted category → value with the
   source counts (partial rule as elsewhere), and a chart tool call counts as a chart. On that real tool
   data: PASS, "plotted counts match the source (7 versions)". Self-tests 106 → 107.
+- **2026-10-08 (Vishakh + Claude)** — Prometheus (Local MCP) and DCGM (API) connectors on Dev's main
+  (`dc40655`), tightly scoped (§3.14). New: `truth/prometheus.py`, `grading/gpu.py` (15 checks),
+  `data/gpu_prompts.xlsx` (16 prompts), `data/dcgm_supported_metrics.csv`, `selftest/test_gpu_connectors.py`
+  (55, later 71). Changed: `settings.py`, `truth/base.py`, `pytest_plugin.py`, `grading/__init__.py`,
+  `grading/source_view.py`, `runner.py`, `reporting/excel.py`, `pytest.ini` (`-n 6`), 4 tests in
+  `test_offline.py`, `.gitignore` (`*.pem`), `.env.example`, `README.md`, `docs/RUNBOOK.md`. Network grading
+  unchanged. Self-tests 107 → 162. The Dynamo / BCM attempt of 2026-10-07 (never merged) was deleted at
+  Vishakh's request.
+- **2026-10-08 (Vishakh + Claude)** — After the GPU run `…_095746` (§3.14): `truth/prometheus.py`
+  `window_stats` (avg / max / min over every sample and over a 50-point series); `grading/gpu.py`: window
+  numbers compared with the statistic their column / words name, per sentence, min / max bounded by the true
+  extremes; chart tool calls count only when rendered; a GPU column in a "hottest" table; a GPU index before the
+  host; throttling guessed from temperature / clocks = FAIL (Dev's note) and "isn't included" = not available;
+  GPU counts not read from "200 W per GPU"; a hot GPU called out by its value. Self-tests 162 → 178.
+- **2026-10-08 (Vishakh + Claude)** — Complete run `…_102507` (112 tests, 49 min): 73 PASS / 28 FAIL / 9 NA /
+  2 BLOCKED (§3.14). After it: GPU hosts also read by their `ip` label, per-host averages from prose, a sentence
+  that names another host is not read as one GPU's value. Self-tests 178 → 180.
+- **2026-10-08 (Vishakh + Claude)** — Vishakh reviewed four FAIL screenshots (zabbix-P17, prometheus-G14, zabbix-P19,
+  dcgm-G16). Changed at his request: G08 — with no throttling series, NCP's per-GPU temperature / utilization / power
+  are compared with Prometheus read at the times of NCP's data calls (agent_trace timestamps; `PrometheusSource.
+  query(at=)`, `reads_at`, `SERIES["sm_clock"]`; the report shows SM clock / temp / util / power at those times);
+  `DCGM_FI_DEV_CLOCK_EVENT_REASONS` added to the throttling names. G13 / G16 — a connector without alerts (DCGM)
+  that reports zero alerts PASSES, and an all-zero alert chart PASSES (was FAIL). Not changed, kept FAIL with the
+  evidence: zabbix-P19
+  (Dev's decision of 2026-10-07: open problems not flagged), prometheus-G14 (hgx-su00-a6000 GPU 1 at ~92 °C, NCP:
+  "no immediate health concerns"). `checks._fail`: the prefix "NCP said the data is not available" only when the
+  answer has no data table (P17 / P19 showed full tables; the prefix made true FAILs look like refusals — reason
+  text only, no status change). `.env`: ONES → 10.20.0.37 / `#ones-37-mcp` (password set by Vishakh). Self-tests 180 → 185.
+- **2026-10-08 (Vishakh + Claude)** — Vishakh: zabbix-P17 should PASS ("we asked for the fan and PSU status; the data
+  reported is correct"). `checks.fan_psu` (network grading, changed at Vishakh's request — Dev to confirm, §11 q15): with
+  PARTIAL_PASS a faulty fan / PSU that NCP does not show is "not shown" (partial PASS, listed in the reason); a part NCP
+  names ("PSU 2", "PowerSupply-2", "Fan Module-1") with a good status while the source has it faulty still FAILs;
+  PARTIAL_PASS=0 keeps the old rule. On the saved zabbix-P17 answer (conv 902): PASS, "partial … not shown:
+  Leaf1 / Leaf2 PowerSupply-2=offEnvPower, Leaf1 PowerSupply-2 Fan-1=down". ONES login checked on 10.20.0.37 (200).
+  Self-tests 185 → 186.
+- **2026-10-08 afternoon (Vishakh + Claude)** — Run `…_121940` stopped: NCP 10.4.5.10 refused connections from ~12:28
+  (restart; back ~14:15 with new connectors devrev, dynamo-mcp, ones-209-mcp). Complete run `…_20261008_141958`
+  (14:19–15:28, 1 h 9 min, ONES on 10.20.0.37 / `#ones-37-mcp`): **78 PASS (16 partial, 5 flaky), 28 FAIL, 4 NA,
+  2 BLOCKED**, no connection error. Nexus 4 / 15 / – / 1 · Catalyst 20 / 0 · Zabbix 18 / 2 (P16, P19) · ONES 14 / 5
+  (P07, P10 timed out; P08 "I was unable to generate a response"; P13 / P14 — NCP's ONES tool calls failed with
+  "store_in_memory: unexpected keyword argument" and it listed port counts of all 109 devices) / – / 1 (P16) ·
+  Prometheus 11 / 5 (G08, G09, G14, G15, G16) · DCGM 11 / 1 (G15) / 4 NA (G08, G09, G13, G16). zabbix-P17 PASS
+  (partial: the faulty PowerSupply-2 parts listed as not shown). Two suite misses found in that run and fixed:
+  prometheus-G16 ("no active (firing) alerts" — the brackets broke the "no alerts" reading; later answer "wasn't able
+  to find any ALERTS series … nothing to chart" — with no alerts firing, "no alert data" counts too) and prometheus-G08
+  (NCP gave host-level values "All GPUs on hgx-su00-a6000 are at 100 % utilization"; a sentence about all GPUs of one
+  host now gives that value to each of them). Re-run `…_152909` / `…_153134`: prometheus-G08 PASS (partial, 10 values
+  vs 10 reads at NCP's tool-call times), prometheus-G16 PASS. Self-tests 186 → 190.

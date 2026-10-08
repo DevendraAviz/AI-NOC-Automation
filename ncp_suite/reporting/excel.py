@@ -66,6 +66,9 @@ def write_report(results: list[PromptResult], prompts: list, connectors: list, o
         comments = []
         for col_i, conn in enumerate(connectors, 2):
             runs = cells.get((p.id, conn.key), [])
+            if not p.applies(conn.key):
+                _cell(ws, row_i, col_i, "—", align=CENTER)            # not in this connector's prompt sheet
+                continue
             if not runs:
                 _cell(ws, row_i, col_i, "", align=CENTER)
                 continue

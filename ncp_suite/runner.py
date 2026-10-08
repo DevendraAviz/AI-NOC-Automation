@@ -90,7 +90,7 @@ def _attempt(row: PromptRow, conn: Connector, chat: NcpChat, src: Source, device
     result.extracted = extracted
     calls = tr.calls(answer.trace)
     result.trace, result.trace_summary = tr.short(calls), tr.summary(calls)
-    result.source = source_view(row.check, src, device)     # after grading: shows the values that were graded
+    result.source = source_view(row.check, src, device, row.param)   # after grading: the values that were graded
     if windowed:
         src.clear_window()                                   # the next prompt reads fresh values again
     return result

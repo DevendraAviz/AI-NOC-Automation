@@ -19,7 +19,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 REPORT_DIR = ROOT / "reports"
-PROMPTS_XLSX = ROOT / "data" / "mcp_prompts.xlsx"
+PROMPTS_XLSX = ROOT / "data" / "mcp_prompts.xlsx"           # the network connectors' sheet
+GPU_PROMPTS_XLSX = ROOT / "data" / "gpu_prompts.xlsx"       # Prometheus and DCGM (Dev's GPU-metrics sheet)
+DCGM_SUPPORTED = ROOT / "data" / "dcgm_supported_metrics.csv"   # the metrics the DCGM connector supports
 
 
 def _load_env(path: Path) -> None:
@@ -87,6 +89,8 @@ TOLERANCE = {
     "cpu": env_float("CPU_TOL", 10),
     "mem": env_float("MEM_TOL", 3),
     "temp": env_float("TEMP_TOL", 3),
+    "util": env_float("GPU_UTIL_TOL", 10),      # GPU utilization, points
+    "power": env_float("POWER_TOL", 10),        # GPU power draw, % of the source value
 }
 # Dev, 2026-10-07: "if a bit of data is given and it matches the source, pass it". On: a list
 # answer that shows only part of the data PASSES when everything it shows is right (the reason
@@ -126,25 +130,31 @@ class Connector:
     password: str
     device: str = ""    # fixed device for <DEVICE> prompts (blank = auto pick)
     extra: dict = field(default_factory=dict)
+    prompts: Path = PROMPTS_XLSX     # the prompt sheet this connector runs
+    needs_login: bool = True         # False: <KEY>_USER / <KEY>_PASSWORD optional (Prometheus basic auth) or unused
 
 
 # To add a connector: one row here + ncp_suite/truth/<key>.py + its keys in .env
 # (TAG_<KEY>, <KEY>_URL, <KEY>_USER, <KEY>_PASSWORD, optional DEVICE_<KEY>).
 # Row order = column order in the result matrix.
 REGISTRY = (
-    # key        matrix column title             truth class                extra {name: (.env key, default)}
-    ("nexus",    "Nexus Dashboard (Local MCP)",  "nexus:NexusSource",       {"domain": ("NEXUS_DOMAIN", "DefaultAuth")}),
-    ("catalyst", "Catalyst Center (Local MCP)",  "catalyst:CatalystSource", {}),
-    ("zabbix",   "Zabbix",                       "zabbix:ZabbixSource",     {}),
-    ("ones",     "ONES",                         "ones:OnesSource",         {"links_path": ("ONES_LINKS_PATH", "")}),
+    # key          matrix column title            truth class                    extra {name: (.env key, default)}             prompt sheet      login
+    ("nexus",      "Nexus Dashboard (Local MCP)", "nexus:NexusSource",           {"domain": ("NEXUS_DOMAIN", "DefaultAuth")}, PROMPTS_XLSX,     True),
+    ("catalyst",   "Catalyst Center (Local MCP)", "catalyst:CatalystSource",     {},                                          PROMPTS_XLSX,     True),
+    ("zabbix",     "Zabbix",                      "zabbix:ZabbixSource",         {},                                          PROMPTS_XLSX,     True),
+    ("ones",       "ONES",                        "ones:OnesSource",             {"links_path": ("ONES_LINKS_PATH", "")},     PROMPTS_XLSX,     True),
+    # GPU metrics (2026-10-08): both read the Prometheus the DCGM exporters feed (truth/prometheus.py)
+    ("prometheus", "Prometheus (Local MCP)",      "prometheus:PrometheusSource", {},                                          GPU_PROMPTS_XLSX, False),
+    ("dcgm",       "DCGM",                        "prometheus:DcgmSource",       {},                                          GPU_PROMPTS_XLSX, False),
 )
 
 
-def _connector(key: str, title: str, source: str, extra: dict) -> Connector:
+def _connector(key: str, title: str, source: str, extra: dict, prompts: Path = PROMPTS_XLSX,
+               needs_login: bool = True) -> Connector:
     k = key.upper()
     return Connector(key, title, env(f"TAG_{k}"), f"ncp_suite.truth.{source}", env(f"{k}_URL"),
                      env(f"{k}_USER"), env(f"{k}_PASSWORD"), env(f"DEVICE_{k}"),
-                     {name: env(var, default) for name, (var, default) in extra.items()})
+                     {name: env(var, default) for name, (var, default) in extra.items()}, prompts, needs_login)
 
 
 CONNECTORS: dict[str, Connector] = {row[0]: _connector(*row) for row in REGISTRY}
@@ -161,5 +171,7 @@ def missing(connectors: list[Connector], ncp: bool) -> list[str]:
         k = c.key.upper()
         if ncp:
             need[f"TAG_{k}"] = c.tag
-        need.update({f"{k}_URL": c.url, f"{k}_USER": c.user, f"{k}_PASSWORD": c.password})
+        need[f"{k}_URL"] = c.url
+        if c.needs_login:
+            need.update({f"{k}_USER": c.user, f"{k}_PASSWORD": c.password})
     return [name for name, value in need.items() if not value]
