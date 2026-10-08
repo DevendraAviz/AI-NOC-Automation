@@ -92,6 +92,19 @@ def _image(path: Path) -> str:
     return f'<img alt="{esc(path.name)}" src="data:image/png;base64,{data}">'
 
 
+def _trace_html(r: PromptResult) -> str:
+    """One-line summary, then each call (masked, results shortened) in a fold-out table."""
+    if not r.trace:
+        return esc(r.trace_summary) or "—"
+    rows = "".join(
+        f"<tr><td>{esc(c.get('path'))}</td><td><b>{esc(c.get('tool'))}</b></td><td>{esc(c.get('connector'))}</td>"
+        f"<td>{esc(c.get('success'))}</td><td>{esc(c.get('ms'))}</td><td><pre>{esc(c.get('arguments'))}</pre></td>"
+        f"<td><pre>{esc(c.get('error') or c.get('result'))}</pre></td></tr>" for c in r.trace)
+    return (f"{esc(r.trace_summary)}<details><summary>{len(r.trace)} call(s)</summary>"
+            "<table class='ncp-table'><tr><th>Agent</th><th>Tool</th><th>Connector</th><th>OK</th><th>ms</th>"
+            f"<th>Arguments</th><th>Result / error</th></tr>{rows}</table></details>")
+
+
 def details_html(r: PromptResult, image_dir: Path) -> str:
     """One test's full record, shown when its row is opened in the report."""
     followups = "".join(f"<li><b>Suite replied:</b> {esc(sent)}<br><b>NCP:</b> {esc(reply[:400])}</li>"
@@ -106,8 +119,12 @@ def details_html(r: PromptResult, image_dir: Path) -> str:
         ("Follow-ups", f"<ol>{followups}</ol>" if followups else "none"),
         ("Conversation / time", f"{esc(r.conversation_id) or '—'} · {esc(r.seconds)} s"),
         ("Tools called", esc(", ".join(r.tools)) or "—"),
-        ("Retries", "<br>".join(esc(x) for x in r.retries) or "none"),
+        ("NCP tool calls (agent_trace)", _trace_html(r)),
+        ("Retries / attempts", "<br>".join(esc(x) for x in r.retries) or "none"),
     ]
+    if r.extracted:
+        fields.append(("LLM reader (copied from NCP's answer; graded by code)",
+                       f"<pre class='ncp-answer'>{esc(r.extracted)}</pre>"))
     if r.judge:
         fields.append(("Judge note (does not change the result)", esc(r.judge)))
     fields.append(("NCP answer vs source",

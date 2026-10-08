@@ -18,17 +18,18 @@ of data is given and matches the source truth, pass it"):
 """
 from __future__ import annotations
 
+import json
 import re
 from collections import Counter
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 from ncp_suite import settings
 from ncp_suite.grading.compare import (all_lines, clauses_about, contains, count_found, first_position,
-                                       has_bad_word, has_chart, integers, interface_names, lines_about, low,
+                                       has_bad_word, has_chart, heading_of, integers, interface_names, lines_about, low,
                                        mentions, name_column_extras, norm_if, numbers, parse_tables, plain,
                                        says_none, says_not_available, table_rows, row_text, value_for)
 from ncp_suite.prompts import PromptRow
-from ncp_suite.truth.base import Device, NoTruth, Source, Unsupported
+from ncp_suite.truth.base import Device, NoTruth, Source, Unsupported, num
 
 
 @dataclass
@@ -45,14 +46,16 @@ class Ctx:
     answer: str
     has_image: bool = False
     device: Device | None = None
+    trace: list = field(default_factory=list)      # NCP's agent_trace (tool calls with their arguments)
 
 
 WORDS = {"cpu": ("cpu",), "mem": ("memory", "mem", "ram"), "temp": ("temperature", "temp", "°c")}
 LABEL = {"cpu": "CPU %", "mem": "memory %", "temp": "temperature °C"}
 UNIT = {"cpu": "%", "mem": "%", "temp": "°c"}
 # table headers that show a device field (devices_fields): a shown column must match the source
-FIELD_HEADERS = {"mgmt IP": ("ip", "mgmt"), "model": ("model", "platform", "sku", "pid"),
-                 "serial": ("serial", "s/n"), "version": ("version", "software", "os", "release")}
+# ("Platform" is not a model column: NCP fills it with the OS family — EOS, IOS — zabbix-P03, conv 504)
+FIELD_HEADERS = {"mgmt IP": r"\bip\b|mgmt|management", "model": r"model|sku|\bpid\b",
+                 "serial": r"serial|s/n", "version": r"version|software|\bos\b|release"}
 
 
 def cap(items, n: int = 6) -> str:
@@ -125,19 +128,24 @@ def devices_fields(ctx: Ctx) -> Verdict:
     fields = [(attr, label) for attr, label in (("ip", "mgmt IP"), ("model", "model"), ("serial", "serial"),
                                                  ("os_version", "version")) if any(getattr(d, attr) for d in devs)]
     exp = f"{len(devs)} devices with " + ", ".join(label for _, label in fields)
+    snaps = ctx.src.device_snapshots()                  # every inventory read while NCP answered
     rows: dict[str, dict[str, bool]] = {}
     for d in devs:
         lines = lines_about(ctx.answer, [d.name] + ([d.ip] if d.ip else []))
         if lines:
             text = " ".join(lines)
-            rows[d.name] = {label: contains(text, getattr(d, attr)) for attr, label in fields if getattr(d, attr)}
+            rows[d.name] = {label: contains(text, getattr(d, attr)) or any(
+                                getattr(s[d.name], attr) and contains(text, getattr(s[d.name], attr))
+                                for s in snaps if d.name in s)
+                            for attr, label in fields if getattr(d, attr)}
     if settings.PARTIAL_PASS:
-        # a field counts as shown when NCP has a column for it, or matches it for some device;
-        # a shown field must match on every listed device
+        # a field counts as shown when NCP's table has a column for it (no table: when it matches
+        # for some device); a shown field must match on every listed device. Headers only when there
+        # is a table: Zabbix host names hold IPs ("Linux Server 10.4.4.177"), zabbix-P03 conv 391
         headers = [h for t in parse_tables(ctx.answer) for h in t[0]]
         shown = {label for _, label in fields
-                 if any(re.search(rf"\b{re.escape(k)}\b", h) for h in headers for k in FIELD_HEADERS[label])
-                 or any(r.get(label) for r in rows.values())}
+                 if (any(re.search(FIELD_HEADERS[label], h) for h in headers) if headers
+                     else any(r.get(label) for r in rows.values()))}
     else:
         shown = {label for _, label in fields}
     problems, not_listed = [], []
@@ -196,13 +204,19 @@ def os_version_counts(ctx: Ctx) -> Verdict:
 
 def models_list(ctx: Ctx) -> Verdict:
     devs = ctx.src.devices()
-    models = sorted({d.model for d in devs if d.model})
+    models = sorted({d.model for d in devs if d.model}) or sorted({d.platform for d in devs if d.platform})
     if not models:
         raise NoTruth("the source gives no model/platform")
     exp = cap(models, 10)
-    missing = [m for m in models
-               if not contains(ctx.answer, m)
-               and not any(d.platform and contains(ctx.answer, d.platform) for d in devs if d.model == m)]
+    snaps = ctx.src.device_snapshots()                  # a model from any read while NCP answered counts
+
+    def named(m: str) -> bool:
+        group = [d for d in devs if m in (d.model, d.platform)]
+        return contains(ctx.answer, m) or any(
+            (d.platform and contains(ctx.answer, d.platform))
+            or any(d.name in s and s[d.name].model and contains(ctx.answer, s[d.name].model) for s in snaps)
+            for d in group)
+    missing = [m for m in models if not named(m)]
     if missing and settings.PARTIAL_PASS and len(missing) < len(models):
         return _partial(f"{len(models) - len(missing)} of {len(models)} models/platforms mentioned", missing, exp)
     if missing:
@@ -212,22 +226,43 @@ def models_list(ctx: Ctx) -> Verdict:
 
 # ---- health ------------------------------------------------------------------------
 def _flagged(ctx: Ctx, d: Device) -> bool:
-    return any(has_bad_word(ln) for ln in clauses_about(ctx.answer, [d.name] + ([d.ip] if d.ip else [])))
+    """A bad word next to the device, or the device listed under a heading like "Unhealthy devices"."""
+    names = [d.name] + ([d.ip] if d.ip else [])
+    if any(has_bad_word(ln) for ln in clauses_about(ctx.answer, names)) or has_bad_word(heading_of(ctx.answer, names)):
+        return True
+    # a count above 0 in a "problems / alarms / issues" column (zabbix-P19 conv 704: "Active problems")
+    return any(has_bad_word(col) and (n := numbers(cell)) and n[0] > 0
+               for row in table_rows(ctx.answer) if any(mentions(row_text(row), x) for x in names)
+               for col, cell in row.items())
+
+
+def _health(ctx: Ctx, devs: list[Device]) -> tuple[list[Device], list[Device], str]:
+    """(unhealthy at every inventory sample while NCP answered, devices whose health changed during
+    the answer — ONES 10.20.0.37 flips ~45 every 60 s — and a note for the expected text).
+    Without a sampling window: the one current read, as before."""
+    snaps = ctx.src.device_snapshots()
+
+    def states(d: Device) -> list:
+        return [s[d.name].healthy for s in snaps if d.name in s] or [d.healthy]
+    bad = [d for d in devs if all(x is False for x in states(d))]
+    moved = [d for d in devs if d not in bad and any(x is False for x in states(d))]
+    note = f"; {len(moved)} changed health during the answer (either way accepted)" if moved else ""
+    return bad, moved, note
 
 
 def unhealthy_devices(ctx: Ctx) -> Verdict:
     devs = ctx.src.devices()
     if all(d.healthy is None for d in devs):
         raise NoTruth("the source gives no health signal")
-    bad = [d for d in devs if d.healthy is False]
-    exp = ("unhealthy: " + cap(f"{d.name} ({d.reason})" for d in bad)) if bad else "all devices healthy"
+    bad, moved, note_moved = _health(ctx, devs)
+    exp = (("unhealthy: " + cap(f"{d.name} ({d.reason})" for d in bad)) if bad else "all devices healthy") + note_moved
     if not bad:
-        flagged = [d.name for d in devs if _flagged(ctx, d)]
+        flagged = [d.name for d in devs if d not in moved and _flagged(ctx, d)]
         if flagged and not says_none(ctx.answer):
             return _fail(ctx, f"source shows all healthy, NCP flagged: {cap(flagged)}", exp)
         return _ok("source shows all healthy; NCP agreed", exp)
     missing = [d.name for d in bad if not _seen(ctx.answer, d)]
-    extra = [d.name for d in devs if d.healthy and _flagged(ctx, d)]
+    extra = [d.name for d in devs if d.healthy and d not in moved and _flagged(ctx, d)]
     note = f" (also flagged, healthy by source: {cap(extra)})" if extra else ""
     if missing and settings.PARTIAL_PASS and len(missing) < len(bad):
         return _partial(f"{len(bad) - len(missing)} of {len(bad)} unhealthy devices named{note}", missing, exp)
@@ -238,8 +273,8 @@ def unhealthy_devices(ctx: Ctx) -> Verdict:
 
 def health_summary(ctx: Ctx) -> Verdict:
     devs = ctx.src.devices()
-    bad = [d for d in devs if d.healthy is False]
-    exp = f"{len(devs)} devices; unhealthy: {cap(d.name for d in bad) or 'none'}"
+    bad, _, note_moved = _health(ctx, devs)
+    exp = f"{len(devs)} devices; unhealthy: {cap(d.name for d in bad) or 'none'}{note_moved}"
     missing = [d.name for d in devs if not _seen(ctx.answer, d)]
     if missing and not (settings.PARTIAL_PASS and len(missing) < len(devs)):
         return _fail(ctx, f"devices missing from the summary: {cap(missing)}", exp)
@@ -346,7 +381,17 @@ def _above(ctx: Ctx, kind: str) -> Verdict:
            f"max {max(max(v) for v in samples.values()):g}%")
     rows = table_rows(ctx.answer)
     scope = [row_text(r) for r in rows] if rows else [ctx.answer]
-    listed = {n for n in samples if any(mentions(s, n) for s in scope)}
+    ips = _ips(ctx.src)
+
+    def claimed(n: str) -> bool:
+        """Listed as above the threshold: named, and NCP's own value (if it gives one) is above it.
+        Dev, 2026-10-07 (§11 q8): devices shown with their lower value as context are not a claim
+        (catalyst-P11 conv 672: "none above 80 %" + a table of all four at 2-9 %)."""
+        if not any(mentions(s, n) for s in scope):
+            return False
+        got = value_for(ctx.answer, [n] + ([ips[n]] if ips.get(n) else []), WORDS[kind], unit=UNIT[kind])
+        return got is None or got > thr or got == thr
+    listed = {n for n in samples if claimed(n)}
     wrong = sorted(listed & set(must_not))
     missing = [n for n in must if n not in listed]
     if missing and not (settings.PARTIAL_PASS and len(missing) < len(must) and not wrong):
@@ -453,8 +498,13 @@ def fan_psu(ctx: Ctx) -> Verdict:
     not_covered = [d for d in devices if not mentions(ctx.answer, d)]
     if not_covered and not (settings.PARTIAL_PASS and len(not_covered) < len(devices)):
         return _fail(ctx, f"devices not covered: {cap(not_covered)}", exp)
-    unflagged = sorted({c.device for c in bad if c.device not in not_covered
-                        and not any(has_bad_word(ln) for ln in clauses_about(ctx.answer, [c.device]))})
+    def reported(c) -> bool:
+        """A bad word, or the source's own faulty status ("False", "offEnvPower") next to the device
+        (ones-P17, conv 464: NCP showed ONES's PSU status "False" for each faulty PSU)."""
+        own = re.sub(r"\s*\(.*\)$", "", low(c.status)).strip()
+        return any(has_bad_word(ln) or (own and re.search(rf"(?<![\w-]){re.escape(own)}(?![\w-])", low(ln)))
+                   for ln in clauses_about(ctx.answer, [c.device]))
+    unflagged = sorted({c.device for c in bad if c.device not in not_covered and not reported(c)})
     if unflagged:
         return _fail(ctx, f"faulty fan/PSU not reported on: {cap(unflagged)}", exp)
     if not_covered:
@@ -467,8 +517,31 @@ def fan_psu(ctx: Ctx) -> Verdict:
 def chart_os_version(ctx: Ctx) -> Verdict:
     groups = _version_groups(ctx)
     exp = "bar chart of " + cap(f"{v}: {n}" for v, n in groups.most_common())
-    if not has_chart(ctx.answer, ctx.has_image):
+    # the plotted data, from NCP's own chart tool call in agent_trace (zabbix-P20 conv of run 160637:
+    # generate_column_chart {"data": [{"category": "9.3(14)", "value": 2}, …]}) — CHANGED 2026-10-07
+    plotted: dict[str, object] = {}
+    for t in ctx.trace:
+        if "chart" in str(t.get("tool_name") or "").lower():
+            try:
+                rows = json.loads(t.get("arguments") or "{}").get("data") or []
+            except (ValueError, AttributeError):
+                rows = []
+            plotted.update({str(r.get("category")): r.get("value") for r in rows if isinstance(r, dict)})
+    if not plotted and not has_chart(ctx.answer, ctx.has_image):
         return _fail(ctx, "no chart in the answer", exp)
+    if plotted:
+        problems, missing = [], []
+        for ver, n in groups.items():
+            got = next((v for c, v in plotted.items() if contains(c, ver)), None)
+            if got is None:
+                missing.append(f"{ver} ({n})")
+            elif num(got) != n:
+                problems.append(f"{ver}: chart {got} vs source {n}")
+        if problems or (missing and not (settings.PARTIAL_PASS and len(missing) < len(groups))):
+            return _fail(ctx, "chart data differs from the source: " + cap(problems + [f"{m} not plotted" for m in missing], 4), exp)
+        if missing:
+            return _partial(f"chart data matches for {len(groups) - len(missing)} of {len(groups)} versions", missing, exp)
+        return _ok(f"chart returned; plotted counts match the source ({len(groups)} versions)", exp)
     if any(contains(ctx.answer, v) for v in groups):
         problems = [t for miss, t in _check_groups(ctx, groups) if not (miss and settings.PARTIAL_PASS)]
         if problems:

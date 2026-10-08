@@ -69,8 +69,14 @@ def has_bad_word(text: str) -> bool:
     return any(w in t for w in BAD_WORDS)
 
 
+TEXT_BAR = re.compile(r"[█▉▊▋▌▍▎▏▇▆▅▄▃▂▁■▓▒░]")
+
+
 def has_chart(text: str, has_image: bool) -> bool:
-    return has_image or "ui://" in low(text) or "[image" in low(text)
+    """An image, a chart widget, or a text bar chart: two or more lines of bar glyphs
+    ("03.06.06E ████ (2)", catalyst-P20 conv 708, 2026-10-07)."""
+    bars = sum(1 for ln in (text or "").splitlines() if TEXT_BAR.search(ln))
+    return has_image or "ui://" in low(text) or "[image" in low(text) or bars >= 2
 
 
 # ---- names ----------------------------------------------------------------------
@@ -187,6 +193,24 @@ TIME_OR_DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}(?:[T ]\d{1,2}:\d{2}(?::\d{2})?(?
                           r"|\b\d{1,2}:\d{2}(?::\d{2})?\b")
 
 
+def heading_of(text: str, names: list[str]) -> str:
+    """The heading above a plain (non-table) line that names the entity, e.g. "### Unhealthy devices"
+    over "Wistron-L8572, Cisco-S2868, …" (ones-P19, conv 545, 2026-10-07). '' if none."""
+    lines = (text or "").splitlines()
+    for i, ln in enumerate(lines):
+        if ln.lstrip().startswith("|") or not any(mentions(ln, n) for n in names):
+            continue
+        for prev in reversed(lines[:i]):
+            s = prev.strip()
+            if not s:
+                continue
+            if s.startswith("|"):
+                break                                   # a table in between: not this list's heading
+            if s.startswith("#") or re.fullmatch(r"\*\*[^*]+\*\*:?", s) or s.endswith(":"):
+                return s
+    return ""
+
+
 def numbers(s: str) -> list[float]:
     s = re.sub(r"\b\d+(?:\.\d+){3}\b", " ", str(s or ""))          # drop IP addresses
     s = TIME_OR_DATE.sub(" ", s)            # drop dates and times ("as of 2026-10-07 05:39 UTC" -> not 5)
@@ -228,6 +252,14 @@ def value_for(text: str, names: list[str], words: tuple[str, ...], whole_text: b
                     first_any = found[0]
         if first_any is not None:
             return first_any
+    # A line that names the entity but not the metric ("1. Arista Leaf 1 – 96.15 %", zabbix-P08,
+    # conv 408): its value if the line holds exactly one number with the unit. Lines with several
+    # ("20.16 % (lowest, A) → 96.15 % (highest, B)") are skipped — which number is whose is unclear.
+    if unit_re:
+        for scope in scopes[:len(scopes) - 1 if whole_text else len(scopes)]:
+            found = unit_re.findall(TIME_OR_DATE.sub(" ", low(scope)))
+            if len(found) == 1:
+                return float(found[0])
     return None
 
 
@@ -247,7 +279,15 @@ def name_column_extras(text: str, known: list[str]) -> list[str]:
             continue
         for r in table:
             cell = str(r.get(best, "")).strip().strip("*`")
-            if cell and not re.fullmatch(r"(total|—|-|n/a|\.\.\.)", low(cell)) \
+            if cell and not re.fullmatch(r"(total|—|-|n/a|\.\.\.)", low(cell)) and not is_placeholder(cell) \
                     and not any(mentions(cell, k) or mentions(k, cell) for k in known_l):
                 extras.append(cell)
     return extras
+
+
+def is_placeholder(cell: str) -> bool:
+    """NCP's filler row in a cut-short table: "… *(additional rows omitted for brevity)*" (ones-P01,
+    conv 383, 2026-10-07) — not a device."""
+    c = low(cell).strip(" *_`")
+    return c.startswith(("…", "...", "(+", "+ ")) or any(
+        w in c for w in ("omitted", "more rows", "additional rows", "truncated", "not shown", "and more"))

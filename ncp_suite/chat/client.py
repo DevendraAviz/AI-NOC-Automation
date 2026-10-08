@@ -71,6 +71,7 @@ class ChatResult:
     conversation_id: str | None = None
     turns: list[tuple[str, str]] = field(default_factory=list)   # (sent, reply)
     tools: list[str] = field(default_factory=list)
+    trace: list[dict] = field(default_factory=list)              # agent_trace of every turn (raw, unmasked)
     retries: list[str] = field(default_factory=list)             # one line per failed earlier attempt
 
     @property
@@ -170,6 +171,7 @@ class NcpChat:
         res.text, res.error = text, answer.error
         res.has_image = res.has_image or answer.has_image
         res.tools += answer.tools
+        res.trace += answer.trace
 
     async def _open(self):
         ctx = None

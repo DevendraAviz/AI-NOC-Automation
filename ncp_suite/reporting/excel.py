@@ -82,18 +82,20 @@ def write_report(results: list[PromptResult], prompts: list, connectors: list, o
     d = wb.create_sheet("Details")
     cols = ["ID", "Connector", "Scope", "Result", "Reason", "Expected (source)", "Prompt sent", "Device",
             "Follow-ups", "Seconds", "Conversation", "Tools called", "Retries", "Judge note", "Source data",
-            "NCP answer"]
-    widths = [6, 24, 8, 9, 60, 60, 50, 18, 40, 8, 12, 30, 40, 40, 90, 90]
+            "NCP answer", "NCP tool calls (agent_trace)", "LLM reader table"]
+    widths = [6, 24, 8, 9, 60, 60, 50, 18, 40, 8, 12, 30, 40, 40, 90, 90, 90, 60]
     _rows(d, cols, widths, [_details_row(r) for r in results], status_col=4)
 
     # ---- Failures: what to look at first (FAIL and XFAIL only) -------------------------------------
     f = wb.create_sheet("Failures")
     failed = [r for r in results if r.status in ("FAIL", "XFAIL")]
     _rows(f, ["ID", "Connector", "Result", "Reason", "Expected (source)", "Conversation", "Tools called",
-              "Retries", "Follow-ups", "Prompt sent", "Source data", "NCP answer"],
-          [6, 24, 9, 60, 60, 12, 30, 40, 40, 50, 90, 90],
+              "Retries", "Follow-ups", "Prompt sent", "Source data", "NCP answer", "NCP tool calls (agent_trace)",
+              "LLM reader table"],
+          [6, 24, 9, 60, 60, 12, 30, 40, 40, 50, 90, 90, 90, 60],
           [[r.id, r.title, r.status, r.reason, r.expected, r.conversation_id, ", ".join(r.tools),
-            "\n".join(r.retries), _followups(r), r.sent, r.source[:32000], (r.answer or "")[:32000]]
+            "\n".join(r.retries), _followups(r), r.sent, r.source[:32000], (r.answer or "")[:32000],
+            _trace(r), r.extracted[:32000]]
            for r in failed], status_col=3)
 
     # ---- Summary (live formulas over Details) --------------------------------------------------
@@ -118,10 +120,17 @@ def _followups(r: PromptResult) -> str:
     return " || ".join(f"{a} -> {b[:150]}" for a, b in r.followups)
 
 
+def _trace(r: PromptResult) -> str:
+    """agent_trace for a cell: the summary, then one line per call (results already shortened)."""
+    lines = [r.trace_summary] + [f"{c.get('path')} | {c.get('tool')} | ok={c.get('success')} | "
+                                 f"{(c.get('error') or c.get('result') or '')[:400]}" for c in r.trace]
+    return "\n".join(x for x in lines if x)[:32000]
+
+
 def _details_row(r: PromptResult) -> list:
     return [r.id, r.title, r.scope, r.status, r.reason, r.expected, r.sent, r.device, _followups(r), r.seconds,
             r.conversation_id, ", ".join(r.tools), "\n".join(r.retries), r.judge, r.source[:32000],
-            (r.answer or "")[:32000]]
+            (r.answer or "")[:32000], _trace(r), r.extracted[:32000]]
 
 
 def _rows(ws, cols: list[str], widths: list[int], rows: list[list], status_col: int) -> None:

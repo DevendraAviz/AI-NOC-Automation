@@ -54,7 +54,22 @@ TIME_QUESTION = ("time range", "time window", "timeframe", "time frame", "how fa
 # ones-P09 / P13 / P14 / P15 on 10.4.5.10). Such a question is a follow-up although it has a table.
 DISAMBIGUATION = ("which one would you like", "which one should", "which one do you",
                   "please specify the ip", "please specify which", "specify the ip address",
-                  "which device would you like", "which device do you", "which device should")
+                  "which device would you like", "which device do you", "which device should",
+                  # ones-P14 (conv 460): "unable to locate a device named X … could you provide the
+                  # management IP address (the switchip value)?" — answered with the IP
+                  "provide the management ip", "provide the ip", "provide its ip", "the switchip")
+
+
+# ones-P07 / P08 / P10 (10.4.5.10, 2026-10-07): NCP will not loop over ONES's 109 devices by itself —
+# "the connector only returns that metric on a per-device basis ... could you narrow the request?" A
+# user would say "all of them": answered so (followup_reply), not taken as the final answer.
+NARROW = ("could you narrow", "narrow the request", "narrow the scope", "one device at a time",
+          "per-device basis", "individual calls", "separate request per", "separate call per",
+          "requires a separate req")      # ones-P08 conv 543: "...but that requires a separate request"
+
+
+def _norm(text: str) -> str:
+    return text.lower().replace("’", "'").replace("‑", "-")
 
 
 def is_followup(text: str) -> bool:
@@ -62,8 +77,10 @@ def is_followup(text: str) -> bool:
     lowered = t.lower()
     small_table = sum(1 for ln in t.splitlines() if ln.lstrip().startswith("|")) <= 8
     # "... Which one would you like? Please specify the IP address." — the "?" is near the end
-    if any(p in lowered.replace("’", "'") for p in DISAMBIGUATION) and small_table and "?" in lowered[-300:]:
+    if any(p in _norm(t) for p in DISAMBIGUATION) and small_table and "?" in lowered[-300:]:
         return True                                         # "two devices named X ... which one?"
+    if any(p in _norm(t) for p in NARROW) and small_table and "?" in lowered:
+        return True                                         # "could you narrow the request?"
     if len(t) < 10 or t.count("|") > 6:                     # a table is an answer
         return False
     if "![" in t or "[image saved" in lowered:              # Ticketing: a chart / image is an answer
@@ -83,7 +100,10 @@ def followup_reply(question: str, ctx: dict) -> str:
     # the device's management IP (from the source, runner.py) tells same-named devices apart
     ip = ctx.get("device_ip", "")
     who = f"{device} (management IP {ip})" if device and ip else device
-    if any(p in q for p in DISAMBIGUATION) and device:
+    if any(p in _norm(question) for p in NARROW):
+        body = (f"Yes, {who} only." if device else
+                f"Yes, all devices in {title}, please. One call per device is fine.")
+    elif any(p in _norm(question) for p in DISAMBIGUATION) and device:
         body = f"Device {who}."
     elif any(p in q for p in TOOL_QUESTION):
         body = f"Use the {title} connector for this."

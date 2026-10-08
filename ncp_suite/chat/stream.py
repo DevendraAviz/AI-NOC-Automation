@@ -31,6 +31,7 @@ class AnswerStream:
         self.final: list[str] = []
         self.ui: dict[str, dict] = {}
         self.tools: list[str] = []
+        self.trace: list[dict] = []           # agent_trace of the end frame: tool calls + raw results
         self.has_image = False
         self.ended = False                    # end frame seen: only late content is awaited
         self.error = ""
@@ -72,6 +73,8 @@ class AnswerStream:
                 self.final.append(f"[{ctype} CONTENT] {data.get('content', '')}".strip())
         elif kind in END_TYPES:
             self.ended = True
+            if isinstance(data.get("agent_trace"), list):   # CHANGED 2026-10-07: keep the tool payload
+                self.trace.extend(data["agent_trace"])
         elif kind == "error":
             self.error = str(data.get("message", "WebSocket error"))
         return True

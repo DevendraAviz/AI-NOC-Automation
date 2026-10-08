@@ -196,6 +196,8 @@ class Source:
         self._login_error = ""
         self._device: Device | None = None
         self._window: list[dict[str, dict]] = []      # metric samples taken while NCP answered
+        self._dev_window: list[dict[str, Device]] = []  # inventory samples taken while NCP answered
+        self._sample_devices = False
         self._window_start = 0.0
         self._poller: threading.Thread | None = None
         self._stop = threading.Event()
@@ -274,13 +276,16 @@ class Source:
             raise NoTruth(f"{self.title}: no {label} values in the source payload")
         return values
 
-    # ---- sampling window (metric prompts; runner.py) ---------------------------------------
-    def begin_window(self, every: float) -> None:
-        """Sample the metrics now and every `every` seconds until end_window(). Values move
-        (CPU, memory, temperature; ONES 10.20.0.37 changes them every 30 s), and NCP's tool read
-        them at some point during the answer — so the answer is compared with all samples."""
+    # ---- sampling window (runner.py) -----------------------------------------------------------
+    def begin_window(self, every: float, devices: bool = False) -> None:
+        """Sample now, every `every` seconds, and once more at end_window(): the metrics (CPU,
+        memory, temperature), or with devices=True the inventory (model, serial, health). Values
+        move, and NCP's tool read them at some point during the answer — so the answer is compared
+        with all samples. ONES 10.20.0.37 is a simulator (measured 2026-10-07): new metrics every
+        30 s; every 60 s a new random model / serial for ~90 devices and new health for ~40-47."""
         self.end_window()
-        self._window, self._window_start = [], time.time()
+        self._window, self._dev_window, self._window_start = [], [], time.time()
+        self._sample_devices = devices
         self._take_sample()
         self._stop = threading.Event()
         self._poller = threading.Thread(target=self._poll, args=(every,), daemon=True)
@@ -295,7 +300,11 @@ class Source:
 
     def clear_window(self) -> None:
         self.end_window()
-        self._window, self._window_start = [], 0.0
+        self._window, self._dev_window, self._window_start = [], [], 0.0
+
+    def device_snapshots(self) -> list[dict[str, Device]]:
+        """Each inventory sample of the window, oldest first (the current inventory if none)."""
+        return self._dev_window or [{d.name: d for d in self.devices()}]
 
     def _poll(self, every: float) -> None:
         while not self._stop.wait(every):
@@ -304,9 +313,13 @@ class Source:
     def _take_sample(self) -> None:
         with self._lock:
             try:
-                self._window.append(self._metrics())
+                if self._sample_devices:
+                    self._cache.clear()             # a fresh inventory read; nothing else reads it meanwhile
+                    self._dev_window.append({d.name: d for d in self.devices()})
+                else:
+                    self._window.append(self._metrics())
             except Exception as exc:                # a failed sample is skipped; the checks see the rest
-                log.debug("%s: metric sample failed: %s", self.title, exc)
+                log.debug("%s: sample failed: %s", self.title, exc)
 
     def interfaces(self, dev: Device) -> list[Interface]:
         raw_items = self._cached(f"if:{dev.name}", lambda: self._interfaces(dev))

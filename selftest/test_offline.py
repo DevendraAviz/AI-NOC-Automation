@@ -29,6 +29,12 @@ from ncp_suite.truth.base import Component, Device, Interface, Link, NoTruth, So
 pytestmark = pytest.mark.offline
 
 
+@pytest.fixture(autouse=True)
+def _no_llm_reader(monkeypatch):
+    """Self-tests never call the LLM reader on the network (a test that wants it fakes it)."""
+    monkeypatch.setattr(settings, "EXTRACT_URL", "")
+
+
 # ---------------------------------------------------------------- fake source
 class FakeSource(Source):
     def __init__(self, links_unsupported=False, metrics_broken=False, no_mem=False):
@@ -111,7 +117,7 @@ BAD = {
     "mem_all": "Memory data is not available for this connector.",
     "cpu_mem_device": "Device leaf-1: CPU utilization 60%, memory utilization 41%.",
     "cpu_top": "leaf-1 has the highest CPU.",
-    "cpu_above": T(["Device", "CPU"], ["leaf-2", "91%"], ["leaf-1", "12%"]),
+    "cpu_above": T(["Device", "CPU"], ["leaf-2", "91%"], ["leaf-1", "85%"]),       # leaf-1 is at 12 %
     "mem_above": "No devices are above 75%.",
     "interfaces_list": "leaf-1 has no interfaces.",
     "interfaces_down": "No interfaces are down on leaf-1.",
@@ -248,6 +254,140 @@ def test_zabbix_part_status_and_memory_pool():
     assert has_bad_word("| cisconx-engai-leaf01 | up (2) | offEnvPower (5) |")
 
 
+def test_placeholder_row_is_not_an_invented_device(monkeypatch):
+    # ones-P01 (conv 383): NCP ends a cut-short table with a filler row
+    monkeypatch.setattr(settings, "PARTIAL_PASS", True)
+    answer = T(["Hostname", "IP"], ["leaf-1", "10.0.0.1"], ["leaf-2", "10.0.0.2"],
+               ["… *(additional rows omitted for brevity)*", ""])
+    v = run("devices_list", answer)
+    assert v.status == "PASS" and v.reason.startswith("partial:"), v.reason
+
+
+def test_values_in_a_numbered_list_without_the_metric_word():
+    # zabbix-P08 (conv 408): "1. Arista Leaf 1 – 96.15 %", plus a summary line naming two devices
+    answer = ("**Memory utilization**\n- Range: **40.5 %** (lowest, *leaf-1*) → **80 %** (highest, *leaf-2*)\n"
+              "1. leaf-2 – 80 %\n2. spine-1 – 60.4 %\n3. leaf-1 – 40.5 %")
+    assert run("mem_all", answer).status == "PASS"
+
+
+def test_a_column_ncp_did_not_show_is_not_shown_even_if_a_name_holds_an_ip(monkeypatch):
+    # zabbix-P03 (conv 391): no IP column; "Linux Server 10.0.0.9" holds an IP in its name
+    monkeypatch.setattr(settings, "PARTIAL_PASS", True)
+
+    class Hosts(FakeSource):
+        def _devices(self):
+            return [Device("Linux Server 10.0.0.9", "10.0.0.9", "X1", "S1", "1.0"),
+                    Device("leaf-1", "10.0.0.1", "N9K", "FDO1", "10.3")]
+    answer = T(["Host", "model", "serial", "osversion"], ["Linux Server 10.0.0.9", "X1", "S1", "1.0"],
+               ["leaf-1", "N9K", "FDO1", "10.3"])
+    v = run("devices_fields", answer, Hosts())
+    assert v.status == "PASS" and "field mgmt IP" in v.reason, v.reason
+
+
+def test_models_fall_back_to_platform_when_the_source_has_no_model():
+    class NoModel(FakeSource):          # ONES 10.20.0.37: model is random per read, so left out
+        def _devices(self):
+            return [Device("leaf-1", "10.0.0.1", "", "", "4.4", platform="wistron_6512_32r"),
+                    Device("leaf-2", "10.0.0.2", "", "", "4.4", platform="Accton-AS7326-56X")]
+    assert run("models_list", "Platforms: wistron_6512_32r and Accton-AS7326-56X.", NoModel()).status == "PASS"
+    assert run("models_list", "Models: FOOS9443.", NoModel()).status == "FAIL"
+
+
+def test_faulty_part_reported_with_the_sources_own_status_word():
+    class OnesPsu(FakeSource):          # ones-P17 (conv 464): ONES PSU status "False"
+        def _components(self):
+            return [Component("leaf-1", "psu", "PSU 1", "True", True), Component("leaf-2", "psu", "PSU 1", "False", False)]
+    answer = T(["Hostname", "PSU Name", "Operational Status"], ["leaf-1", "PSU 1", "True"], ["leaf-2", "PSU 1", "False"])
+    assert run("fan_psu", answer, OnesPsu()).status == "PASS"
+
+
+class MovingInventory(FakeSource):
+    """ONES 10.20.0.37: every 60 s a new serial for most devices and new health for many."""
+    def __init__(self):
+        super().__init__()
+        self.reads = 0
+
+    def _devices(self):
+        self.reads += 1
+        first = self.reads == 1
+        return [Device("leaf-1", "10.0.0.1", "N9K", "OLD1" if first else "NEW1", "10.3", healthy=not first),
+                Device("leaf-2", "10.0.0.2", "N9K", "S2", "10.3", healthy=False, reason="PSU out of power"),
+                Device("spine-1", "10.0.0.3", "N9K", "S3", "10.3", healthy=True)]
+
+
+def _sampled(src):
+    src.begin_window(every=0.05, devices=True)
+    time.sleep(0.2)
+    src.end_window()
+    return src
+
+
+def test_a_field_from_any_inventory_sample_during_the_answer_counts():
+    src = _sampled(MovingInventory())              # leaf-1 serial: OLD1 first, NEW1 later
+    answer = T(["Hostname", "Mgmt IP", "Model", "Serial", "Version"], ["leaf-1", "10.0.0.1", "N9K", "OLD1", "10.3"],
+               ["leaf-2", "10.0.0.2", "N9K", "S2", "10.3"], ["spine-1", "10.0.0.3", "N9K", "S3", "10.3"])
+    assert run("devices_fields", answer, src).status == "PASS"
+    assert run("devices_fields", answer.replace("OLD1", "XXX9"), src).status == "FAIL"
+
+
+def test_health_that_changed_during_the_answer_is_not_required():
+    src = _sampled(MovingInventory())              # leaf-1 unhealthy at the first sample only
+    v = run("unhealthy_devices", "leaf-2 is unhealthy: PSU out of power.", src)
+    assert v.status == "PASS" and "changed health during the answer" in v.expected, (v.reason, v.expected)
+    assert run("unhealthy_devices", "All devices look healthy.", src).status == "FAIL"    # leaf-2 stayed bad
+
+
+def test_devices_listed_under_an_unhealthy_heading_are_flagged():
+    # ones-P19 (conv 545): "### Unhealthy devices" then a comma-separated list of names
+    answer = ("**Health summary**\n\n| Metric | Value |\n|---|---|\n| Unhealthy | 1 |\n\n"
+              "### Unhealthy devices (reported by the controller)\n\nleaf-2,\n\n### Healthy devices\n\nleaf-1, spine-1")
+    assert run("health_summary", answer).status == "PASS"
+    assert run("unhealthy_devices", answer).status == "PASS"
+
+
+def test_devices_shown_below_the_threshold_as_context_are_not_listed():
+    # catalyst-P11 (conv 672): "none above 80 %" plus every device with its lower value (Dev, §11 q8)
+    answer = "None of the devices is above 95 %.\n\n" + T(["Device", "CPU %"], ["leaf-1", 12], ["leaf-2", 91],
+                                                         ["spine-1", 45])
+    assert evaluate(Ctx(PromptRow("PX", "p", "cpu_above", 95), FakeSource(), answer)).status == "PASS"
+
+
+def test_a_text_bar_chart_is_a_chart():
+    # catalyst-P20 (conv 708): a bar chart drawn with block characters
+    assert run("chart_os_version", "```\n10.3(3)  ████ (2)\n10.2(5)  ██ (1)\n```").status == "PASS"
+    assert run("chart_os_version", "```\n10.3(3)  ████ (3)\n10.2(5)  ██ (1)\n```").status == "FAIL"   # wrong count
+
+
+def test_chart_data_from_the_tool_call_is_checked():
+    # zabbix-P20 (run 160637): generate_column_chart's arguments hold the plotted data
+    def chart(*rows):
+        return [{"tool_name": "UI_Visualization", "arguments": "{}"},
+                {"tool_name": "generate_column_chart",
+                 "arguments": json.dumps({"data": [{"category": c, "value": v} for c, v in rows]})}]
+    row = PromptRow("P20", "p", "chart_os_version")
+    text = "Here is the chart."                                   # no ui:// tag in the text: the trace shows it
+    assert evaluate(Ctx(row, FakeSource(), text, trace=chart(("10.3(3)", 2), ("10.2(5)", 1)))).status == "PASS"
+    assert evaluate(Ctx(row, FakeSource(), text, trace=chart(("10.3(3)", 3), ("10.2(5)", 1)))).status == "FAIL"
+    assert evaluate(Ctx(row, FakeSource(), text)).status == "FAIL"                           # no chart at all
+
+
+def test_a_problem_count_column_flags_the_device():
+    # zabbix-P19 (conv 704): "Active problems" column instead of a health word
+    table = lambda n: T(["Host", "CPU", "Active problems*"], ["leaf-1", "12 %", 0], ["leaf-2", "91 %", n],
+                        ["spine-1", "45 %", 0])
+    assert run("health_summary", table(2)).status == "PASS"
+    assert run("health_summary", table(0)).status == "FAIL"
+
+
+def test_a_platform_column_is_not_a_model_column(monkeypatch):
+    # zabbix-P03 (conv 504): "Platform" holds EOS / IOS — NCP gave no model at all
+    monkeypatch.setattr(settings, "PARTIAL_PASS", True)
+    answer = T(["Host", "IP", "Vendor", "Platform"], ["leaf-1", "10.0.0.1", "Cisco", "NX-OS"],
+               ["leaf-2", "10.0.0.2", "Cisco", "NX-OS"], ["spine-1", "10.0.0.3", "Cisco", "NX-OS"])
+    v = run("devices_fields", answer)
+    assert v.status == "PASS" and "field model" in v.reason, v.reason
+
+
 def test_not_available_while_source_has_data_says_so():
     v = run("mem_all", BAD["mem_all"])
     assert v.status == "FAIL" and "not available" in v.reason
@@ -305,6 +445,24 @@ def test_which_one_question_with_a_table_is_a_followup_answered_with_the_ip():
     assert followup_reply(q, ctx) == "#ones-37-mcp Device Leaf-1 (management IP 10.4.4.64)."
     # a full answer that ends with an offer is still an answer
     assert not is_followup(GOOD["cpu_all"] + "\n\nWould you like a chart of these values?")
+    # ones-P14 (conv 460): NCP could not find the device by name and asks for its IP
+    ask_ip = ("I’m unable to locate a device named **AS7326‑6045** in the ONES inventory. Could you provide the "
+              "management IP address (the `switchip` value) for that switch? Once I have the IP, I can retrieve "
+              "and show you all interfaces where `oper_status = down`.")
+    assert is_followup(ask_ip)
+    assert followup_reply(ask_ip, {**ctx, "device": "AS7326-6045", "device_ip": "10.20.12.32"}) \
+        == "#ones-37-mcp Device AS7326-6045 (management IP 10.20.12.32)."
+    # ones-P08 (conv 529): NCP asks to narrow a whole-fleet request; a user says "all of them"
+    narrow = ("I can retrieve memory‑utilization values, but the ONES‑MCP connector only returns that metric on a "
+              "per‑device basis. To avoid making hundreds of individual calls, could you narrow the request—e.g., "
+              "give a list of device IPs/hostnames?")
+    assert is_followup(narrow)
+    assert followup_reply(narrow, {"connector": "ONES", "tag": "#ones-37-mcp"}) \
+        == "#ones-37-mcp Yes, all devices in ONES, please. One call per device is fine."
+    assert not is_followup(GOOD["cpu_all"] + "\n\nWould you like to narrow down the list by region?")   # an answer
+    per_call = ("I can pull the current memory-utilization metric (`memUtil`) from each device with the ONES "
+                "`get_device_system` call, but that requires a separate request per device. Shall I go ahead?")
+    assert followup_reply(per_call, {"connector": "ONES", "tag": "#ones-37-mcp"}).endswith("One call per device is fine.")
 
 
 # ---------------------------------------------------------------- chat client vs a fake NCP
@@ -319,6 +477,20 @@ WIDGET = {"type": "resource", "resource": {"uri": "ui://data-table-1", "mimeType
                                            "meta": {"ui": {"templateUri": "ui://template/data-table"}}},
           "structuredContent": {"title": "CPU", "columns": ["Device", "CPU %"],
                                 "rows": [["leaf-1", 13], ["leaf-2", 89.5], ["spine-1", 44]]}}
+
+
+# agent_trace as NCP sends it on agent_complete (10.4.5.10, conversation 3243 shape); a switch login in a result
+TRACE = [{"type": "tool_call", "agent_path": ["orchestrator"], "depth": 0, "tool_name": "query_fake",
+          "connector_name": None, "arguments": '{"query": "How many devices?"}', "success": True,
+          "result": "There are 3 devices.", "error": None, "duration_ms": 900},
+         {"type": "tool_call", "agent_path": ["orchestrator", "fake_agent"], "depth": 1, "tool_name": "get_devices",
+          "connector_name": "fake", "arguments": "{}", "success": True,
+          "result": '{"devices": [{"hostname": "leaf-1", "username": "admin", "password": "S3cret!"}]}',
+          "error": None, "duration_ms": 120},
+         {"type": "tool_call", "agent_path": ["orchestrator", "fake_agent"], "depth": 1, "tool_name": "get_fabrics",
+          "connector_name": "fake", "arguments": "{}", "success": True,
+          "result": "API request failed: Server error '500 Internal Server Error' for url 'https://x/api/fabrics'",
+          "error": None, "duration_ms": 80}]
 
 
 async def _notifications(ws, seconds: float) -> None:
@@ -350,7 +522,7 @@ async def _fake_ncp(ws):
                                           "tool_name": "get_devices"}))
                 await ws.send(json.dumps({"type": "agent_llm_stream", "conversation_id": 42,
                                           "chunk": "There are 3 devices in your network."}))
-                await ws.send(json.dumps({"type": "agent_complete", "conversation_id": 42}))
+                await ws.send(json.dumps({"type": "agent_complete", "conversation_id": 42, "agent_trace": TRACE}))
                 await ws.send(json.dumps({"type": "follow_up_suggestions", "conversation_id": 42,
                                           "suggestions": ["Show CPU"]}))
                 await _notifications(ws, 6)
@@ -442,6 +614,11 @@ def test_answer_ends_on_agent_complete_not_on_silence(fake_ncp):
     assert res.text == "There are 3 devices in your network."
     assert res.tools == ["get_devices"]
     assert res.seconds < 4, f"took {res.seconds}s: notifications after agent_complete kept the answer open"
+    # the tool payload is kept, and the switch login in it is masked (rule 11)
+    from ncp_suite.chat import trace as tr
+    calls = tr.calls(res.trace)
+    assert len(calls) == 3 and "S3cret" not in json.dumps(calls) and '"password": "***"' in calls[1]["result"]
+    assert tr.summary(calls).startswith("2 data call(s) · 1 failed: get_fabrics → ")
 
 
 def test_notifications_and_other_chats_do_not_keep_answer_open_or_leak(fake_ncp):
@@ -545,6 +722,57 @@ def test_runner_blocks_when_device_cannot_be_chosen():
     r = run_case(PromptRow("P13", "List all interfaces of device <DEVICE>.", "interfaces_list"),
                  FAKE_CONN, chat, NoDevices())
     assert r.status == "BLOCKED" and "<DEVICE>" in r.reason and not chat.asked
+
+
+class SequenceChat(ScriptedChat):
+    """Answers with the next text each time (a new chat per ask)."""
+    def __init__(self, *texts):
+        super().__init__(texts[0])
+        self.texts = list(texts)
+
+    def ask(self, prompt, context=None, timeout=None):
+        self.text = self.texts[min(len(self.asked), len(self.texts) - 1)]
+        res = super().ask(prompt, context, timeout)
+        res.conversation_id = str(80 + len(self.asked))
+        return res
+
+
+def test_a_fail_is_repeated_once_and_a_pass_on_repeat_is_flaky(monkeypatch):
+    monkeypatch.setattr(settings, "REPEAT_FAILS", 1)
+    row = PromptRow("P02", "How many devices are in my network?", "devices_count")
+    flaky = run_case(row, FAKE_CONN, SequenceChat("You have 4 devices.", "There are 3 devices."), FakeSource())
+    assert flaky.status == "PASS" and flaky.reason.startswith("flaky: failed first (conversation 81")
+    assert flaky.conversation_id == "82" and flaky.retries[0].startswith("attempt 1: FAIL")
+    twice = run_case(row, FAKE_CONN, SequenceChat("You have 4 devices.", "You have 5 devices."), FakeSource())
+    assert twice.status == "FAIL" and twice.reason.startswith("failed twice (conversations 81, 82)")
+    monkeypatch.setattr(settings, "REPEAT_FAILS", 0)
+    chat = SequenceChat("You have 4 devices.", "There are 3 devices.")
+    assert run_case(row, FAKE_CONN, chat, FakeSource()).status == "FAIL" and len(chat.asked) == 1
+
+
+def test_llm_reader_only_reads_and_the_code_still_grades(monkeypatch):
+    from ncp_suite import runner
+    monkeypatch.setattr(settings, "REPEAT_FAILS", 0)
+    monkeypatch.setattr(runner, "extract_enabled", lambda check: True)
+    row = PromptRow("P07", "Show CPU utilization of all devices.", "cpu_all")
+    odd = "CPU looks fine: the first leaf sits near thirteen, leaf‑2 is busy and the spine is moderate."
+    # the reader's table matches the source -> PASS, said so, table kept for the reviewer
+    monkeypatch.setattr(runner, "extract_table", lambda c, q, a: T(["Device", "CPU %"], ["leaf-1", 13], ["leaf-2", 90],
+                                                                      ["spine-1", 44]))
+    r = run_case(row, FAKE_CONN, ScriptedChat(odd), FakeSource())
+    assert r.status == "PASS" and "read via the LLM reader" in r.reason and "| leaf-1 | 13 |" in r.extracted
+    # the reader's table is wrong -> the code still says FAIL
+    monkeypatch.setattr(runner, "extract_table", lambda c, q, a: T(["Device", "CPU %"], ["leaf-1", 13], ["leaf-2", 50],
+                                                                      ["spine-1", 44]))
+    assert run_case(row, FAKE_CONN, ScriptedChat(odd), FakeSource()).status == "FAIL"
+
+
+def test_llm_reader_reply_becomes_a_table():
+    from ncp_suite.grading.extract import COLUMNS, _rows, to_table
+    content = 'Sure:\n{"rows": [{"device": "leaf-1", "ip": null, "value": "13 %"}, {"device": "leaf-2", "value": 91}]}'
+    assert to_table(_rows(content), COLUMNS["cpu_all"]) == ("| Device | IP | CPU % |\n|---|---|---|\n"
+                                                            "| leaf-1 |  | 13 % |\n| leaf-2 |  | 91 |")
+    assert to_table(_rows("no json here"), COLUMNS["cpu_all"]) == ""
 
 
 # ---------------------------------------------------------------- source HTTP plumbing
@@ -656,6 +884,23 @@ def test_html_matrix_has_devs_layout_counts_and_blanks():
     assert prompts[0].prompt in page and "spine-1" in page and "x.xlsx" in page
     # 8 planned cells, 4 results -> 4 "not run" across the connectors
     assert page.count('<td class="st"></td>') == 4
+
+
+def test_reports_show_the_tool_trace_and_the_llm_reader_table(tmp_path):
+    from ncp_suite.reporting.html import details_html
+    calls = [{"path": "orchestrator > fake_agent", "tool": "get_fabrics", "connector": "fake", "arguments": "{}",
+              "success": True, "error": "", "ms": 80, "result": "500 Internal Server Error <b>"}]
+    row = _row("P07", "zabbix", "PASS", reason="ok — read via the LLM reader")
+    row.trace, row.trace_summary = calls, "1 data call(s) · 1 failed: get_fabrics → 500"
+    row.extracted = "| Device | CPU % |\n|---|---|\n| leaf-1 | 13 |"
+    page = details_html(row, tmp_path)
+    assert "1 failed: get_fabrics" in page and "&lt;b&gt;" in page
+    assert "LLM reader" in page and "| leaf-1 | 13 |" in page
+    wb = load_workbook(write_report([row], load_prompts(settings.PROMPTS_XLSX), list(settings.CONNECTORS.values()),
+                                    tmp_path))
+    head = [c.value for c in wb["Details"][1]]
+    assert head[-2:] == ["NCP tool calls (agent_trace)", "LLM reader table"]
+    assert "get_fabrics" in wb["Details"].cell(row=2, column=len(head) - 1).value
 
 
 def test_html_details_escapes_answer_and_embeds_chart(tmp_path):
