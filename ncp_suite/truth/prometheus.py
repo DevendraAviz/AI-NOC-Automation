@@ -200,18 +200,7 @@ class PrometheusSource(Source):
 
     def snapshot(self) -> dict:
         out: dict = {"connector": self.title, "base": self.base, "kinds": {}}
-
-        def grab(kind, fn):
-            try:
-                rows = fn()
-                out["kinds"][kind] = {"status": "OK", "count": len(rows), "sample": rows[:8]}
-            except Unsupported as exc:
-                out["kinds"][kind] = {"status": "UNSUPPORTED", "detail": str(exc)}
-            except NoTruth as exc:
-                out["kinds"][kind] = {"status": "NO_TRUTH", "detail": str(exc)}
-            except Exception as exc:
-                out["kinds"][kind] = {"status": "ERROR", "detail": f"{type(exc).__name__}: {exc}"}
-
+        grab = lambda kind, fn: self._grab(out, kind, fn, 8)
         grab("devices", lambda: [asdict(g) for g in self.gpus()])
         grab("metric names", self.catalog)
         for kind in ("util", "temp", "power", "mem_pct", "xid"):

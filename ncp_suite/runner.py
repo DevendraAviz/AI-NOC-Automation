@@ -70,30 +70,30 @@ def _attempt(row: PromptRow, conn: Connector, chat: NcpChat, src: Source, device
         answer = chat.ask(sent, context={"connector": conn.title, "tag": conn.tag,
                                          "device": device.name if device else "",
                                          "device_ip": device.ip if device else ""}, timeout=row.timeout)
+        if windowed:
+            src.end_window()                                 # one more sample right after the answer
+        ctx = Ctx(row, src, answer.text, answer.has_image, device, answer.trace)
+        verdict, extracted = evaluate(ctx, answer.error), ""
+        if verdict.status == "FAIL" and extract_enabled(row.check) and answer.text.strip():
+            # the code could not match it: let the LLM reader copy the data into a table, grade that table
+            extracted = extract_table(row.check, sent, answer.text)
+            if extracted:
+                again = evaluate(replace(ctx, answer=extracted), answer.error)
+                if again.status == "PASS":
+                    verdict = replace(again, reason=f"{again.reason} — read via the LLM reader (code reading: "
+                                                    f"{verdict.reason[:150]})")
+        judge = ""
+        if row.check in JUDGE_CHECKS and verdict.status in ("PASS", "FAIL"):
+            judge = second_opinion(sent, answer.text, verdict.expected)
+        result = _result(row, conn, sent, device, verdict, answer, judge)
+        result.extracted = extracted
+        calls = tr.calls(answer.trace)
+        result.trace, result.trace_summary = tr.short(calls), tr.summary(calls)
+        result.source = source_view(row.check, src, device, row.param)   # after grading: the values that were graded
+        return result
     finally:
         if windowed:
-            src.end_window()
-    ctx = Ctx(row, src, answer.text, answer.has_image, device, answer.trace)
-    verdict, extracted = evaluate(ctx, answer.error), ""
-    if verdict.status == "FAIL" and extract_enabled(row.check) and answer.text.strip():
-        # the code could not match it: let the LLM reader copy the data into a table, grade that table
-        extracted = extract_table(row.check, sent, answer.text)
-        if extracted:
-            again = evaluate(replace(ctx, answer=extracted), answer.error)
-            if again.status == "PASS":
-                verdict = replace(again, reason=f"{again.reason} — read via the LLM reader (code reading: "
-                                                f"{verdict.reason[:150]})")
-    judge = ""
-    if row.check in JUDGE_CHECKS and verdict.status in ("PASS", "FAIL"):
-        judge = second_opinion(sent, answer.text, verdict.expected)
-    result = _result(row, conn, sent, device, verdict, answer, judge)
-    result.extracted = extracted
-    calls = tr.calls(answer.trace)
-    result.trace, result.trace_summary = tr.short(calls), tr.summary(calls)
-    result.source = source_view(row.check, src, device, row.param)   # after grading: the values that were graded
-    if windowed:
-        src.clear_window()                                   # the next prompt reads fresh values again
-    return result
+            src.clear_window()                               # also after a crash: the next prompt reads fresh values
 
 
 def _result(row: PromptRow, conn: Connector, sent: str, device: Device | None, verdict: Verdict,

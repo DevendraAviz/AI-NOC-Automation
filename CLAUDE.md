@@ -1706,3 +1706,8 @@ Add one line per change: date, who, what, why.
   (NCP gave host-level values "All GPUs on hgx-su00-a6000 are at 100 % utilization"; a sentence about all GPUs of one
   host now gives that value to each of them). Re-run `…_152909` / `…_153134`: prometheus-G08 PASS (partial, 10 values
   vs 10 reads at NCP's tool-call times), prometheus-G16 PASS. Self-tests 186 → 190.
+- **2026-10-09 (Dev + Claude)** — Cleanup after a read-only audit; no grading, assertion or tolerance change.
+  `runner._attempt`: the sampling window is cleared in a `finally` (a check that raised left old samples for the
+  next prompt's report "Source" panel; normal-path order unchanged). `truth/base.py` `Source._grab()`: the probe
+  snapshot helper, once (was copied in `truth/prometheus.py`; same output, checked on fake sources).
+  `prompts.PromptRow.notes` removed (loaded, never read; the sheet's Notes column stays). Self-tests 190 pass.

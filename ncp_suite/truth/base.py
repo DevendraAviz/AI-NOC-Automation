@@ -384,22 +384,7 @@ class Source:
     def snapshot(self) -> dict:
         """Everything the checks would use, with per-kind status. Used by the probe."""
         out: dict[str, Any] = {"connector": self.title, "base": self.base, "kinds": {}}
-
-        def grab(kind: str, fn: Callable[[], Any]) -> None:
-            try:
-                value = fn()
-                rows = [asdict(x) if hasattr(x, "__dataclass_fields__") else x
-                        for x in (value if isinstance(value, list) else [value])]
-                if isinstance(value, dict):
-                    rows = [value]
-                out["kinds"][kind] = {"status": "OK", "count": len(value), "sample": rows[:5]}
-            except Unsupported as exc:
-                out["kinds"][kind] = {"status": "UNSUPPORTED", "detail": str(exc)}
-            except NoTruth as exc:
-                out["kinds"][kind] = {"status": "NO_TRUTH", "detail": str(exc)}
-            except Exception as exc:  # keep probing the other kinds
-                out["kinds"][kind] = {"status": "ERROR", "detail": f"{type(exc).__name__}: {exc}"}
-
+        grab = lambda kind, fn: self._grab(out, kind, fn)
         grab("devices", self.devices)
         for kind in ("cpu", "mem", "temp"):
             grab(kind, lambda k=kind: self.metric(k))
@@ -413,6 +398,23 @@ class Source:
         grab("components", self.components)
         out["raw"] = self.raw
         return out
+
+    @staticmethod
+    def _grab(out: dict, kind: str, fn: Callable[[], Any], n: int = 5) -> None:
+        """One probe read into out["kinds"][kind]: OK with the count and n sample rows, or why not."""
+        try:
+            value = fn()
+            rows = [asdict(x) if hasattr(x, "__dataclass_fields__") else x
+                    for x in (value if isinstance(value, list) else [value])]
+            if isinstance(value, dict):
+                rows = [value]
+            out["kinds"][kind] = {"status": "OK", "count": len(value), "sample": rows[:n]}
+        except Unsupported as exc:
+            out["kinds"][kind] = {"status": "UNSUPPORTED", "detail": str(exc)}
+        except NoTruth as exc:
+            out["kinds"][kind] = {"status": "NO_TRUTH", "detail": str(exc)}
+        except Exception as exc:  # keep probing the other kinds
+            out["kinds"][kind] = {"status": "ERROR", "detail": f"{type(exc).__name__}: {exc}"}
 
     # ---- plumbing ---------------------------------------------------------------
     def _cached(self, name: str, fn: Callable[[], Any], ttl: float | None = None) -> Any:

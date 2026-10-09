@@ -20,7 +20,6 @@ class PromptRow:
     tol: float | None = None          # overrides the default tolerance / min coverage
     applies_to: frozenset = frozenset()   # connector keys; empty = all
     known_issue: str = ""
-    notes: str = ""
     timeout: int | None = None        # seconds to wait for NCP's answer; None = keyword rule
 
     def applies(self, connector: str) -> bool:
@@ -48,7 +47,7 @@ def load_prompts(path: Path) -> list[PromptRow]:
         out.append(PromptRow(
             id=str(r["id"]).strip(), prompt=str(r["prompt"]).strip(), check=str(r.get("check") or "").strip(),
             param=_f(r.get("param")), tol=_f(r.get("tolerance")), applies_to=frozenset(applies - {"all"}),
-            known_issue=str(r.get("known_issue") or "").strip(), notes=str(r.get("notes") or "").strip(),
+            known_issue=str(r.get("known_issue") or "").strip(),
             timeout=int(timeout) if timeout else None,
         ))
     return out
